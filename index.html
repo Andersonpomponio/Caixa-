@@ -643,7 +643,7 @@ async function startSync(user){
     .subscribe(status=>{
       if(status === 'SUBSCRIBED') updateSyncUi();
     });
-  if(ready) showLoginGate(`Caixa conectada como ${person.name}.`, true);
+  if(ready) hideLoginGate();
   else showLoginGate('Não foi possível conectar esta caixa. Confira a internet e tente entrar novamente.');
 }
 
