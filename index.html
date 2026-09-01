@@ -14,6 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.4/dist/umd/supabase.js"></script>
 <style>
   :root{
     --bg: #0A0A0B;
@@ -401,8 +402,25 @@
     </div>
 
     <div class="diamond-rule" style="margin-top:22px;"><span>◆</span></div>
-    <h3 class="display" style="font-size:15px;">Compartilhar com sua esposa</h3>
-    <p style="font-size:12px;color:var(--ink-soft);margin:-6px 0 14px;line-height:1.5;">Os dados ficam salvos só neste aparelho. Para sincronizar com o celular dela: exporte um backup aqui, envie por WhatsApp, e ela importa no aparelho dela. Repitam sempre que quiserem atualizar.</p>
+    <h3 class="display" style="font-size:15px;">Sincronizar em tempo real</h3>
+    <p id="syncStatus" style="font-size:12px;color:var(--ink-soft);margin:-6px 0 14px;line-height:1.5;">Entre para sincronizar este caixa entre os aparelhos.</p>
+    <div class="field">
+      <label>E-mail da conta compartilhada</label>
+      <input id="syncEmail" type="email" autocomplete="email" placeholder="exemplo@email.com">
+    </div>
+    <div class="field">
+      <label>Senha</label>
+      <input id="syncPassword" type="password" autocomplete="current-password" placeholder="Mínimo de 8 caracteres">
+    </div>
+    <div class="modal-actions" style="margin-top:0;">
+      <button class="btn btn-ghost" id="btnSyncSignUp">Criar acesso</button>
+      <button class="btn btn-primary" id="btnSyncSignIn">Entrar</button>
+    </div>
+    <button class="btn btn-ghost" id="btnSyncSignOut" style="width:100%;margin-top:8px;display:none;">Sair da sincronização</button>
+
+    <div class="diamond-rule" style="margin-top:22px;"><span>◆</span></div>
+    <h3 class="display" style="font-size:15px;">Backup manual</h3>
+    <p style="font-size:12px;color:var(--ink-soft);margin:-6px 0 14px;line-height:1.5;">Use o backup como cópia de segurança ou para transferir dados antigos.</p>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="btnExportBackup">⬇ Exportar backup</button>
       <button class="btn btn-ghost" id="btnImportBackup">⬆ Importar backup</button>
@@ -429,6 +447,15 @@ let periodMode = 'month';
 let periodDate = new Date();
 periodDate.setHours(0,0,0,0);
 
+const SUPABASE_URL = 'https://nynpmqlnxvmihusmfffo.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_p7L4enXB-29lvVO4gNegLA_UnIBtJty';
+const supabaseClient = window.supabase
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+  : null;
+let syncUser = null;
+let syncChannel = null;
+let syncTimer = null;
+
 const fmt = v => v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const toast = msg => {
   const t = document.getElementById('toast');
@@ -451,6 +478,108 @@ function lsSet(key, value){
     localStorage.setItem(LS_PREFIX + key, JSON.stringify(value));
     return true;
   }catch(e){ return false; }
+}
+
+function syncPayload(){
+  return {stores, transactions, bills};
+}
+
+function updateSyncUi(message){
+  const status = document.getElementById('syncStatus');
+  const signOut = document.getElementById('btnSyncSignOut');
+  const email = document.getElementById('syncEmail');
+  const password = document.getElementById('syncPassword');
+  const signUp = document.getElementById('btnSyncSignUp');
+  const signIn = document.getElementById('btnSyncSignIn');
+  if(!status) return;
+  const connected = Boolean(syncUser);
+  status.textContent = message || (connected ? `Sincronizado como ${syncUser.email}.` : 'Entre para sincronizar este caixa entre os aparelhos.');
+  signOut.style.display = connected ? 'block' : 'none';
+  email.disabled = connected;
+  password.disabled = connected;
+  signUp.style.display = connected ? 'none' : 'block';
+  signIn.style.display = connected ? 'none' : 'block';
+  if(connected) email.value = syncUser.email || '';
+}
+
+function applyCloudState(data){
+  if(!data || !Array.isArray(data.stores) || !Array.isArray(data.transactions) || !Array.isArray(data.bills)) return false;
+  stores = data.stores;
+  transactions = data.transactions;
+  bills = data.bills;
+  lsSet('stores', stores);
+  lsSet('transactions', transactions);
+  lsSet('bills', bills);
+  render();
+  return true;
+}
+
+async function pushCloudState(){
+  if(!supabaseClient || !syncUser) return;
+  const {error} = await supabaseClient.from('app_state').upsert({
+    user_id: syncUser.id,
+    data: syncPayload(),
+    updated_at: new Date().toISOString(),
+  }, {onConflict:'user_id'});
+  if(error) updateSyncUi('Não consegui sincronizar agora. Verifique a internet.');
+  else updateSyncUi();
+}
+
+function scheduleCloudSync(){
+  if(!syncUser) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(()=>{ pushCloudState(); }, 500);
+}
+
+async function loadCloudState(){
+  if(!supabaseClient || !syncUser) return;
+  const {data, error} = await supabaseClient.from('app_state').select('data').eq('user_id', syncUser.id).maybeSingle();
+  if(error){
+    updateSyncUi('Não consegui acessar a sincronização. Verifique a internet.');
+    return;
+  }
+  if(data && applyCloudState(data.data)){
+    updateSyncUi();
+  }else{
+    await pushCloudState();
+  }
+}
+
+async function startSync(user){
+  if(!supabaseClient || !user) return;
+  if(syncUser && syncUser.id === user.id) return;
+  if(syncChannel) await syncChannel.unsubscribe();
+  syncUser = user;
+  updateSyncUi('Conectando a sincronização…');
+  await loadCloudState();
+  syncChannel = supabaseClient.channel(`app-state-${user.id}`)
+    .on('postgres_changes', {
+      event:'*', schema:'public', table:'app_state', filter:`user_id=eq.${user.id}`,
+    }, payload=>{
+      if(payload.new && applyCloudState(payload.new.data)) updateSyncUi();
+    })
+    .subscribe(status=>{
+      if(status === 'SUBSCRIBED') updateSyncUi();
+    });
+}
+
+async function initSync(){
+  if(!supabaseClient){
+    updateSyncUi('Sincronização indisponível. Atualize o app com internet.');
+    return;
+  }
+  const {data:{session}} = await supabaseClient.auth.getSession();
+  if(session) await startSync(session.user);
+  else updateSyncUi();
+  supabaseClient.auth.onAuthStateChange((_event, session)=>{
+    if(session) startSync(session.user);
+    else{
+      if(syncChannel) syncChannel.unsubscribe();
+      syncChannel = null;
+      syncUser = null;
+      updateSyncUi();
+    }
+  });
 }
 
 function loadTheme(){
@@ -491,14 +620,17 @@ function loadData(){
 
 function saveStores(){
   if(!lsSet('stores', stores)) toast('Erro ao salvar nomes');
+  scheduleCloudSync();
 }
 
 function saveTransactions(){
   if(!lsSet('transactions', transactions)) toast('Erro ao salvar. Espaço cheio?');
+  scheduleCloudSync();
 }
 
 function saveBills(){
   if(!lsSet('bills', bills)) toast('Erro ao salvar boletos. Espaço cheio?');
+  scheduleCloudSync();
 }
 
 // Exportar / Importar dados (para compartilhar entre o celular do casal)
@@ -1133,7 +1265,42 @@ document.getElementById('fImportFile').onchange = (e)=>{
   e.target.value = '';
 };
 
+function syncCredentials(){
+  return {
+    email: document.getElementById('syncEmail').value.trim(),
+    password: document.getElementById('syncPassword').value,
+  };
+}
+
+document.getElementById('btnSyncSignUp').onclick = async ()=>{
+  if(!supabaseClient){ toast('Sincronização indisponível'); return; }
+  const {email, password} = syncCredentials();
+  if(!email || password.length < 8){ toast('Informe e-mail e uma senha com pelo menos 8 caracteres'); return; }
+  updateSyncUi('Criando acesso…');
+  const {data, error} = await supabaseClient.auth.signUp({email, password});
+  if(error){ updateSyncUi(error.message); return; }
+  if(data.session) await startSync(data.user);
+  else updateSyncUi('Acesse o e-mail informado e confirme o cadastro antes de entrar.');
+};
+
+document.getElementById('btnSyncSignIn').onclick = async ()=>{
+  if(!supabaseClient){ toast('Sincronização indisponível'); return; }
+  const {email, password} = syncCredentials();
+  if(!email || !password){ toast('Informe e-mail e senha'); return; }
+  updateSyncUi('Entrando…');
+  const {data, error} = await supabaseClient.auth.signInWithPassword({email, password});
+  if(error){ updateSyncUi(error.message); return; }
+  await startSync(data.user);
+};
+
+document.getElementById('btnSyncSignOut').onclick = async ()=>{
+  if(!supabaseClient) return;
+  await supabaseClient.auth.signOut();
+  toast('Sincronização desconectada neste aparelho');
+};
+
 loadData();
+initSync();
 </script>
 
 <script>
