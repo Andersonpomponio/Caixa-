@@ -512,8 +512,18 @@ function syncPayload(){
   return {stores, transactions, bills};
 }
 
-function showLoginGate(message){
+function showLoginGate(message, connected=false){
+  const email = document.getElementById('loginEmail');
+  const password = document.getElementById('loginPassword');
+  const create = document.getElementById('btnCreateShared');
+  const enter = document.getElementById('btnLoginShared');
   document.getElementById('loginGate').classList.remove('hidden');
+  email.disabled = connected;
+  password.disabled = connected;
+  create.style.display = connected ? 'none' : 'block';
+  enter.textContent = connected ? 'Abrir caixa' : 'Entrar';
+  if(connected) email.value = syncUser && syncUser.email ? syncUser.email : '';
+  else password.value = '';
   if(message) document.getElementById('loginStatus').textContent = message;
 }
 function hideLoginGate(){ document.getElementById('loginGate').classList.add('hidden'); }
@@ -636,7 +646,7 @@ async function startSync(user){
     .subscribe(status=>{
       if(status === 'SUBSCRIBED') updateSyncUi();
     });
-  if(ready) hideLoginGate();
+  if(ready) showLoginGate(`Caixa conectada como ${user.email || 'conta compartilhada'}.`, true);
   else showLoginGate('Não foi possível conectar esta caixa. Confira a internet e tente entrar novamente.');
 }
 
@@ -1383,6 +1393,7 @@ document.getElementById('btnCreateShared').onclick = async ()=>{
   else setLoginStatus('Conta criada. Confirme o e-mail e depois entre nos dois celulares.');
 };
 document.getElementById('btnLoginShared').onclick = async ()=>{
+  if(syncUser){ hideLoginGate(); return; }
   if(!supabaseClient){ setLoginStatus('A sincronização não está disponível. Verifique a internet.'); return; }
   const {email, password} = loginCredentials();
   if(!email || !password){ setLoginStatus('Informe o e-mail e a senha da caixa.'); return; }
