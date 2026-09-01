@@ -56,6 +56,7 @@
     --shadow: 0 10px 24px rgba(23,20,14,0.10);
   }
   *{box-sizing:border-box;}
+  html{overscroll-behavior-y:none;}
   body{
     margin:0;
     background:var(--bg);
@@ -63,6 +64,7 @@
     font-family:'Manrope',sans-serif;
     -webkit-font-smoothing:antialiased;
     transition:background .3s ease, color .3s ease;
+    overscroll-behavior-y:none;
   }
   .display{font-family:'Playfair Display',serif;}
   .mono{font-family:'JetBrains Mono',monospace;}
@@ -579,15 +581,109 @@ function updateSyncUi(message){
 }
 
 function applyCloudState(data){
-  if(!data || !Array.isArray(data.stores) || !Array.isArray(data.transactions) || !Array.isArray(data.bills)) return false;
+  if(!data || !Array.isArray(data.stores) || !Array.isArray(data.bills)) return false;
   stores = data.stores;
-  transactions = activeTransactions(data.transactions);
   bills = data.bills;
   lsSet('stores', stores);
-  lsSet('transactions', transactions);
   lsSet('bills', bills);
   render();
   return true;
+}
+
+function transactionToCloudRow(transaction){
+  const normalized = normalizeTransactionDate(transaction);
+  return {
+    id: normalized.id,
+    store_id: normalized.storeId,
+    type: normalized.type,
+    category: normalized.category || '',
+    description: normalized.description || '',
+    value: Number(normalized.value),
+    transaction_date: normalized.date,
+    updated_at: new Date().toISOString(),
+    deleted_at: null,
+  };
+}
+
+function cloudRowToTransaction(row){
+  return normalizeTransactionDate({
+    id: row.id,
+    storeId: row.store_id,
+    type: row.type,
+    category: row.category || '',
+    description: row.description || '',
+    value: Number(row.value),
+    date: row.transaction_date,
+  });
+}
+
+async function upsertCloudTransactions(items){
+  const pending = activeTransactions(items);
+  if(!pending.length) return true;
+  if(!supabaseClient || !syncUser) return false;
+  const {error} = await supabaseClient
+    .from('shared_cash_transactions')
+    .upsert(pending.map(transactionToCloudRow), {onConflict:'id'});
+  if(error){
+    updateSyncUi('Lançamento salvo neste aparelho; sincronização pendente.');
+    return false;
+  }
+  updateSyncUi('Lançamentos sincronizados.');
+  return true;
+}
+
+async function loadCloudTransactions(){
+  if(!supabaseClient || !syncUser) return false;
+  const {data, error} = await supabaseClient
+    .from('shared_cash_transactions')
+    .select('id,store_id,type,category,description,value,transaction_date,deleted_at,updated_at');
+  if(error){
+    updateSyncUi('Não consegui carregar os lançamentos. Verifique a internet.');
+    return false;
+  }
+
+  const rows = data || [];
+  const remoteIds = new Set(rows.map(row=>row.id));
+  rows.filter(row=>row.deleted_at).forEach(row=>deletedTransactionIds.add(row.id));
+  const pendingLocal = activeTransactions(transactions).filter(item=>!remoteIds.has(item.id));
+  const remoteActive = rows
+    .filter(row=>!row.deleted_at && !deletedTransactionIds.has(row.id))
+    .map(cloudRowToTransaction);
+  transactions = mergeById(remoteActive, pendingLocal);
+  lsSet('deletedTransactionIds', [...deletedTransactionIds]);
+  lsSet('transactions', transactions);
+  render();
+  if(pendingLocal.length) await upsertCloudTransactions(pendingLocal);
+  return true;
+}
+
+async function markCloudTransactionDeleted(id){
+  if(!supabaseClient || !syncUser) return false;
+  const now = new Date().toISOString();
+  const {error} = await supabaseClient
+    .from('shared_cash_transactions')
+    .update({deleted_at:now, updated_at:now})
+    .eq('id', id);
+  if(error){
+    updateSyncUi('A exclusão ficou salva neste aparelho; sincronização pendente.');
+    return false;
+  }
+  return true;
+}
+
+function applyCloudTransactionChange(payload){
+  const row = payload.new;
+  if(!row || !row.id) return;
+  if(row.deleted_at || deletedTransactionIds.has(row.id)){
+    transactions = transactions.filter(item=>item.id!==row.id);
+  }else{
+    const incoming = cloudRowToTransaction(row);
+    transactions = transactions.filter(item=>item.id!==incoming.id);
+    transactions.push(incoming);
+  }
+  lsSet('transactions', transactions);
+  render();
+  updateSyncUi();
 }
 
 async function loadTransactionDeletions(){
@@ -599,17 +695,34 @@ async function loadTransactionDeletions(){
     updateSyncUi('Não consegui carregar as exclusões. Verifique a internet.');
     return false;
   }
+  const remoteIds = new Set((data || []).map(item=>item.id));
+  const pendingLocal = [...deletedTransactionIds].filter(id=>!remoteIds.has(id));
   (data || []).forEach(item=>deletedTransactionIds.add(item.id));
+  if(pendingLocal.length){
+    const {error: insertError} = await supabaseClient
+      .from('shared_cash_transaction_deletions')
+      .insert(pendingLocal.map(id=>({id})));
+    if(insertError && insertError.code !== '23505'){
+      updateSyncUi('Algumas exclusões ainda estão aguardando sincronização.');
+    }
+  }
   lsSet('deletedTransactionIds', [...deletedTransactionIds]);
   transactions = activeTransactions(transactions);
   lsSet('transactions', transactions);
+  if(deletedTransactionIds.size){
+    const now = new Date().toISOString();
+    await supabaseClient
+      .from('shared_cash_transactions')
+      .update({deleted_at:now, updated_at:now})
+      .in('id', [...deletedTransactionIds]);
+  }
   return true;
 }
 
 async function recordTransactionDeletion(id){
   deletedTransactionIds.add(id);
   lsSet('deletedTransactionIds', [...deletedTransactionIds]);
-  if(!supabaseClient || !syncUser) return true;
+  if(!supabaseClient || !syncUser) return false;
   const {error} = await supabaseClient
     .from('shared_cash_transaction_deletions')
     .insert({id});
@@ -629,10 +742,8 @@ async function pushCloudState(){
   }
   const payload = mergedCloudPayload(current && current.data);
   stores = payload.stores;
-  transactions = payload.transactions;
   bills = payload.bills;
   lsSet('stores', stores);
-  lsSet('transactions', transactions);
   lsSet('bills', bills);
   const {error} = await supabaseClient.from('shared_cash_state').upsert({
     id: 'central',
@@ -681,11 +792,12 @@ async function startSync(user){
   if(localChangeVersion !== versionBeforeLoad){
     ready = await pushCloudState();
   }else if(cloudState && applyCloudState(cloudState)){
-    // Também envia as correções de fuso e remove da cópia central os itens excluídos.
-    ready = await pushCloudState();
+    // Uma atualização normal apenas lê a nuvem; só mudanças locais pendentes escrevem.
+    updateSyncUi();
   }else{
     ready = await pushCloudState();
   }
+  await loadCloudTransactions();
   syncChannel = supabaseClient.channel('shared-cash-central')
     .on('postgres_changes', {
       event:'*', schema:'public', table:'shared_cash_state', filter:'id=eq.central',
@@ -694,15 +806,19 @@ async function startSync(user){
     })
     .on('postgres_changes', {
       event:'INSERT', schema:'public', table:'shared_cash_transaction_deletions',
-    }, payload=>{
+    }, async payload=>{
       if(!payload.new || !payload.new.id) return;
       deletedTransactionIds.add(payload.new.id);
       lsSet('deletedTransactionIds', [...deletedTransactionIds]);
       transactions = activeTransactions(transactions);
       lsSet('transactions', transactions);
+      await markCloudTransactionDeleted(payload.new.id);
       render();
       updateSyncUi();
     })
+    .on('postgres_changes', {
+      event:'*', schema:'public', table:'shared_cash_transactions',
+    }, applyCloudTransactionChange)
     .subscribe(status=>{
       if(status === 'SUBSCRIBED') updateSyncUi();
     });
@@ -767,6 +883,26 @@ document.getElementById('btnRefresh').onclick = async ()=>{
   url.searchParams.set('atualizado', Date.now().toString());
   window.location.replace(url.toString());
 };
+
+// Impede o gesto de puxar para baixo no topo, que recarrega o Safari/iPhone.
+let pullStart = null;
+document.addEventListener('touchstart', event=>{
+  const modal = event.target.closest('.modal');
+  if(event.touches.length !== 1 || window.scrollY > 0 || (modal && modal.scrollTop > 0)){
+    pullStart = null;
+    return;
+  }
+  pullStart = {x:event.touches[0].clientX, y:event.touches[0].clientY, modal};
+}, {passive:true});
+document.addEventListener('touchmove', event=>{
+  if(!pullStart || event.touches.length !== 1) return;
+  if(pullStart.modal && pullStart.modal.scrollTop > 0) return;
+  const deltaX = event.touches[0].clientX - pullStart.x;
+  const deltaY = event.touches[0].clientY - pullStart.y;
+  if(window.scrollY <= 0 && deltaY > 8 && Math.abs(deltaY) > Math.abs(deltaX)) event.preventDefault();
+}, {passive:false});
+document.addEventListener('touchend', ()=>{ pullStart = null; }, {passive:true});
+document.addEventListener('touchcancel', ()=>{ pullStart = null; }, {passive:true});
 loadTheme();
 
 function loadData(){
@@ -799,7 +935,6 @@ function saveStores(){
 function saveTransactions(){
   const saved = lsSet('transactions', transactions);
   if(saved) localChangeVersion++;
-  scheduleCloudSync();
   return saved;
 }
 
@@ -828,18 +963,19 @@ function exportBackup(){
 
 function importBackup(file){
   const reader = new FileReader();
-  reader.onload = (e)=>{
+  reader.onload = async (e)=>{
     try{
       const data = JSON.parse(e.target.result);
       if(!data || !Array.isArray(data.transactions)) throw new Error('formato inválido');
       stores = data.stores && data.stores.length ? data.stores : stores;
-      transactions = data.transactions || [];
+      transactions = activeTransactions(data.transactions || []);
       bills = data.bills || [];
       saveStores();
       saveTransactions();
       saveBills();
       render();
-      toast('Dados importados com sucesso!');
+      const synced = await upsertCloudTransactions(transactions);
+      toast(synced ? 'Dados importados com sucesso!' : 'Importado neste aparelho; sincronização pendente.');
     }catch(err){
       toast('Arquivo inválido. Confira se é um backup deste app.');
     }
@@ -1074,8 +1210,12 @@ function renderTxList(){
       transactions = transactions.filter(t=>t.id!==id);
       render();
       saveTransactions();
-      const synced = await recordTransactionDeletion(id);
-      if(synced) await pushCloudState();
+      const [legacyDeleted, rowDeleted] = await Promise.all([
+        recordTransactionDeletion(id),
+        markCloudTransactionDeleted(id),
+      ]);
+      if(legacyDeleted) await pushCloudState();
+      const synced = legacyDeleted && rowDeleted;
       toast(synced ? 'Lançamento excluído' : 'Excluído neste aparelho; sincronização pendente');
     };
   });
@@ -1141,15 +1281,17 @@ function renderBillPanel(){
       if(btn.dataset.action==='pay'){
         bill.paid = true;
         bill.paidDate = formatLocalDate(new Date());
-        transactions.push({
+        const paidTransaction = {
           id: Date.now().toString(36)+Math.random().toString(36).slice(2,7),
           storeId: bill.storeId, type:'saida', category:'Boleto',
           description: bill.description, value: bill.value, date: bill.paidDate
-        });
+        };
+        transactions.push(paidTransaction);
         render();
         await saveBills();
-        await saveTransactions();
-        toast('Boleto marcado como pago');
+        saveTransactions();
+        const synced = await upsertCloudTransactions([paidTransaction]);
+        toast(synced ? 'Boleto marcado como pago' : 'Pagamento salvo; sincronização pendente.');
       }else{
         bills = bills.filter(b=>b.id!==id);
         render();
@@ -1425,7 +1567,10 @@ document.getElementById('btnSave').onclick = async ()=>{
   closeModal();
   render();
   const saved = saveTransactions();
-  toast(saved ? 'Lançamento salvo' : 'Não foi possível salvar neste aparelho');
+  const synced = saved ? await upsertCloudTransactions([tx]) : false;
+  toast(!saved
+    ? 'Não foi possível salvar neste aparelho'
+    : synced ? 'Lançamento salvo e sincronizado' : 'Lançamento salvo; sincronização pendente.');
 };
 
 // Settings modal
