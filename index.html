@@ -274,9 +274,36 @@
   .fab:hover{transform:translateX(360px) translateY(-3px) scale(1.03);}
   @media(max-width:760px){.wrap{padding:14px 14px 106px;}.header{padding:14px 12px;border-radius:19px;}.fab:hover{transform:translateY(-3px) scale(1.03);}.period-label{min-width:112px;font-size:11px;}.period-mode button{padding:7px 8px;}}
   @media(max-width:370px){.summary{gap:6px;}.scard{padding:13px 9px;}.scard .val{font-size:13px;}.period-filter{gap:6px;padding:8px;}.period-label{min-width:96px;}}
+  .login-gate{position:fixed;inset:0;z-index:100;background:radial-gradient(circle at 15% 8%,rgba(201,162,90,.2),transparent 28rem),var(--bg);display:flex;align-items:center;justify-content:center;padding:20px;}
+  .login-gate.hidden{display:none;}
+  .login-card{width:min(100%,390px);padding:28px 22px;border:1px solid var(--line);border-radius:24px;background:var(--surface);box-shadow:0 22px 60px rgba(0,0,0,.35);}
+  .login-card h2{font-size:25px;margin:0 0 7px;}
+  .login-card p{font-size:13px;color:var(--ink-soft);line-height:1.5;margin:0 0 20px;}
+  .login-card .login-status{min-height:40px;margin:14px 0 0;font-size:12px;color:var(--ink-soft);}
 </style>
 </head>
 <body>
+
+<div class="login-gate" id="loginGate" aria-live="polite">
+  <div class="login-card">
+    <div class="mono" style="color:var(--blue);font-weight:700;margin-bottom:12px;">ANDERSON GLASSES</div>
+    <h2 class="display">Entrar no caixa</h2>
+    <p>Use o mesmo e-mail e senha nos dois celulares. Assim todos os lançamentos ficam na mesma caixa.</p>
+    <div class="field">
+      <label for="loginEmail">E-mail do caixa compartilhado</label>
+      <input id="loginEmail" type="email" autocomplete="email" placeholder="exemplo@email.com">
+    </div>
+    <div class="field">
+      <label for="loginPassword">Senha</label>
+      <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Mínimo de 8 caracteres">
+    </div>
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn btn-ghost" id="btnCreateShared">Criar caixa</button>
+      <button class="btn btn-primary" id="btnLoginShared">Entrar</button>
+    </div>
+    <p class="login-status" id="loginStatus">Entre com a conta compartilhada para abrir o caixa.</p>
+  </div>
+</div>
 
 <div class="wrap">
   <div class="header">
@@ -485,6 +512,33 @@ function syncPayload(){
   return {stores, transactions, bills};
 }
 
+function showLoginGate(message){
+  document.getElementById('loginGate').classList.remove('hidden');
+  if(message) document.getElementById('loginStatus').textContent = message;
+}
+function hideLoginGate(){ document.getElementById('loginGate').classList.add('hidden'); }
+function loginCredentials(){
+  return {
+    email: document.getElementById('loginEmail').value.trim(),
+    password: document.getElementById('loginPassword').value,
+  };
+}
+function setLoginStatus(message){ document.getElementById('loginStatus').textContent = message; }
+
+function mergeById(remoteItems, localItems){
+  const merged = new Map();
+  (Array.isArray(remoteItems) ? remoteItems : []).forEach(item=>{ if(item && item.id) merged.set(item.id, item); });
+  (Array.isArray(localItems) ? localItems : []).forEach(item=>{ if(item && item.id) merged.set(item.id, item); });
+  return [...merged.values()];
+}
+function mergedCloudPayload(cloudData){
+  return {
+    stores: mergeById(cloudData && cloudData.stores, stores),
+    transactions: mergeById(cloudData && cloudData.transactions, transactions),
+    bills: mergeById(cloudData && cloudData.bills, bills),
+  };
+}
+
 function updateSyncUi(message){
   const status = document.getElementById('syncStatus');
   const signOut = document.getElementById('btnSyncSignOut');
@@ -517,13 +571,26 @@ function applyCloudState(data){
 
 async function pushCloudState(){
   if(!supabaseClient || !syncUser) return;
+  const {data: current, error: readError} = await supabaseClient.from('app_state').select('data').eq('user_id', syncUser.id).maybeSingle();
+  if(readError){
+    updateSyncUi('Não consegui sincronizar agora. Verifique a internet.');
+    return false;
+  }
+  const payload = mergedCloudPayload(current && current.data);
+  stores = payload.stores;
+  transactions = payload.transactions;
+  bills = payload.bills;
+  lsSet('stores', stores);
+  lsSet('transactions', transactions);
+  lsSet('bills', bills);
   const {error} = await supabaseClient.from('app_state').upsert({
     user_id: syncUser.id,
-    data: syncPayload(),
+    data: payload,
     updated_at: new Date().toISOString(),
   }, {onConflict:'user_id'});
   if(error) updateSyncUi('Não consegui sincronizar agora. Verifique a internet.');
-  else updateSyncUi();
+  else updateSyncUi('Lançamentos sincronizados.');
+  return !error;
 }
 
 function scheduleCloudSync(){
@@ -552,12 +619,13 @@ async function startSync(user){
   // que a cópia recebida. Não deixe essa cópia antiga apagá-lo.
   const versionBeforeLoad = localChangeVersion;
   const cloudState = await loadCloudState();
+  let ready = true;
   if(localChangeVersion !== versionBeforeLoad){
-    await pushCloudState();
+    ready = await pushCloudState();
   }else if(cloudState && applyCloudState(cloudState)){
     updateSyncUi();
   }else{
-    await pushCloudState();
+    ready = await pushCloudState();
   }
   syncChannel = supabaseClient.channel(`app-state-${user.id}`)
     .on('postgres_changes', {
@@ -568,6 +636,8 @@ async function startSync(user){
     .subscribe(status=>{
       if(status === 'SUBSCRIBED') updateSyncUi();
     });
+  if(ready) hideLoginGate();
+  else showLoginGate('Não foi possível conectar esta caixa. Confira a internet e tente entrar novamente.');
 }
 
 async function initSync(){
@@ -577,7 +647,10 @@ async function initSync(){
   }
   const {data:{session}} = await supabaseClient.auth.getSession();
   if(session) await startSync(session.user);
-  else updateSyncUi();
+  else{
+    updateSyncUi();
+    showLoginGate();
+  }
   supabaseClient.auth.onAuthStateChange((_event, session)=>{
     if(session) startSync(session.user);
     else{
@@ -585,6 +658,7 @@ async function initSync(){
       syncChannel = null;
       syncUser = null;
       updateSyncUi();
+      showLoginGate();
     }
   });
 }
@@ -1296,6 +1370,26 @@ document.getElementById('fImportFile').onchange = (e)=>{
   const proceed = confirm('Importar vai SUBSTITUIR os dados deste aparelho pelos dados do arquivo. Continuar?');
   if(proceed) importBackup(file);
   e.target.value = '';
+};
+
+document.getElementById('btnCreateShared').onclick = async ()=>{
+  if(!supabaseClient){ setLoginStatus('A sincronização não está disponível. Verifique a internet.'); return; }
+  const {email, password} = loginCredentials();
+  if(!email || password.length < 8){ setLoginStatus('Informe um e-mail e uma senha com pelo menos 8 caracteres.'); return; }
+  setLoginStatus('Criando a caixa compartilhada…');
+  const {data, error} = await supabaseClient.auth.signUp({email, password});
+  if(error){ setLoginStatus(error.message); return; }
+  if(data.session) await startSync(data.user);
+  else setLoginStatus('Conta criada. Confirme o e-mail e depois entre nos dois celulares.');
+};
+document.getElementById('btnLoginShared').onclick = async ()=>{
+  if(!supabaseClient){ setLoginStatus('A sincronização não está disponível. Verifique a internet.'); return; }
+  const {email, password} = loginCredentials();
+  if(!email || !password){ setLoginStatus('Informe o e-mail e a senha da caixa.'); return; }
+  setLoginStatus('Entrando na caixa…');
+  const {data, error} = await supabaseClient.auth.signInWithPassword({email, password});
+  if(error){ setLoginStatus(error.message); return; }
+  await startSync(data.user);
 };
 
 function syncCredentials(){
