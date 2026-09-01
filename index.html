@@ -490,6 +490,7 @@ let syncChannel = null;
 let syncTimer = null;
 let localChangeVersion = 0;
 let deletedTransactionIds = new Set();
+let deletedBillIds = new Set();
 const LOGIN_USERS = {
   anderson: {name:'Anderson', email:'anderson@caixacentral.local'},
   luciane: {name:'Luciane', email:'luciane@caixacentral.local'},
@@ -571,11 +572,16 @@ function activeTransactions(items){
     .map(normalizeTransactionDate);
 }
 
+function activeBills(items){
+  return (Array.isArray(items) ? items : [])
+    .filter(item=>item && !deletedBillIds.has(item.id));
+}
+
 function mergedCloudPayload(cloudData){
   return {
     stores: mergeById(cloudData && cloudData.stores, stores),
     transactions: activeTransactions(mergeById(cloudData && cloudData.transactions, transactions)),
-    bills: mergeById(cloudData && cloudData.bills, bills),
+    bills: activeBills(mergeById(cloudData && cloudData.bills, bills)),
   };
 }
 
@@ -592,7 +598,7 @@ function updateSyncUi(message){
 function applyCloudState(data){
   if(!data || !Array.isArray(data.stores) || !Array.isArray(data.bills)) return false;
   stores = data.stores;
-  bills = data.bills;
+  bills = activeBills(data.bills);
   lsSet('stores', stores);
   lsSet('bills', bills);
   render();
@@ -742,6 +748,46 @@ async function recordTransactionDeletion(id){
   return true;
 }
 
+async function loadBillDeletions(){
+  if(!supabaseClient || !syncUser) return false;
+  const {data, error} = await supabaseClient
+    .from('shared_cash_bill_deletions')
+    .select('id');
+  if(error){
+    updateSyncUi('Não consegui carregar as exclusões de boletos. Verifique a internet.');
+    return false;
+  }
+  const remoteIds = new Set((data || []).map(item=>item.id));
+  const pendingLocal = [...deletedBillIds].filter(id=>!remoteIds.has(id));
+  (data || []).forEach(item=>deletedBillIds.add(item.id));
+  if(pendingLocal.length){
+    const {error: insertError} = await supabaseClient
+      .from('shared_cash_bill_deletions')
+      .insert(pendingLocal.map(id=>({id})));
+    if(insertError && insertError.code !== '23505'){
+      updateSyncUi('Algumas exclusões de boletos ainda aguardam sincronização.');
+    }
+  }
+  lsSet('deletedBillIds', [...deletedBillIds]);
+  bills = activeBills(bills);
+  lsSet('bills', bills);
+  return true;
+}
+
+async function recordBillDeletion(id){
+  deletedBillIds.add(id);
+  lsSet('deletedBillIds', [...deletedBillIds]);
+  if(!supabaseClient || !syncUser) return false;
+  const {error} = await supabaseClient
+    .from('shared_cash_bill_deletions')
+    .insert({id});
+  if(error && error.code !== '23505'){
+    updateSyncUi('A exclusão do boleto ficou salva neste aparelho, mas ainda não sincronizou.');
+    return false;
+  }
+  return true;
+}
+
 async function pushCloudState(){
   if(!supabaseClient || !syncUser) return;
   const {data: current, error: readError} = await supabaseClient.from('shared_cash_state').select('data').eq('id', 'central').maybeSingle();
@@ -796,6 +842,7 @@ async function startSync(user){
   // que a cópia recebida. Não deixe essa cópia antiga apagá-lo.
   const versionBeforeLoad = localChangeVersion;
   await loadTransactionDeletions();
+  await loadBillDeletions();
   const cloudState = await loadCloudState();
   let ready = true;
   if(localChangeVersion !== versionBeforeLoad){
@@ -822,6 +869,17 @@ async function startSync(user){
       transactions = activeTransactions(transactions);
       lsSet('transactions', transactions);
       await markCloudTransactionDeleted(payload.new.id);
+      render();
+      updateSyncUi();
+    })
+    .on('postgres_changes', {
+      event:'INSERT', schema:'public', table:'shared_cash_bill_deletions',
+    }, payload=>{
+      if(!payload.new || !payload.new.id) return;
+      deletedBillIds.add(payload.new.id);
+      lsSet('deletedBillIds', [...deletedBillIds]);
+      bills = activeBills(bills);
+      lsSet('bills', bills);
       render();
       updateSyncUi();
     })
@@ -930,7 +988,12 @@ function loadData(){
     lsSet('transactions', transactions);
   }
   const bl = lsGet('bills');
-  if(bl) bills = bl;
+  const deletedBills = lsGet('deletedBillIds');
+  if(Array.isArray(deletedBills)) deletedBillIds = new Set(deletedBills);
+  if(bl){
+    bills = activeBills(bl);
+    lsSet('bills', bills);
+  }
   render();
 }
 
@@ -1310,10 +1373,10 @@ function renderBillPanel(){
         <div class="bill-meta ${isLate?'is-late':isToday?'is-today':''}">${billView==='paid' ? statusTxt : dateStr+' · '+statusTxt}${activeTab==='all' && st ? ' · '+st.name : ''}</div>
       </div>
       <div class="bill-val">${fmt(b.value)}</div>
-      ${billView==='pending' ? `<div class="bill-actions">
-        <button class="bill-btn pay" data-id="${b.id}" data-action="pay" aria-label="Marcar como pago">✓</button>
-        <button class="bill-btn" data-id="${b.id}" data-action="del" aria-label="Excluir">✕</button>
-      </div>` : ''}
+      <div class="bill-actions">
+        ${billView==='pending' ? `<button class="bill-btn pay" data-id="${b.id}" data-action="pay" aria-label="Marcar como pago">✓</button>` : ''}
+        <button class="bill-btn" data-id="${b.id}" data-action="del" aria-label="Excluir boleto">✕</button>
+      </div>
     </div>`;
   }).join('');
 
@@ -1338,9 +1401,11 @@ function renderBillPanel(){
         toast(synced ? 'Boleto marcado como pago' : 'Pagamento salvo; sincronização pendente.');
       }else{
         bills = bills.filter(b=>b.id!==id);
+        const synced = await recordBillDeletion(id);
         render();
         await saveBills();
-        toast('Boleto excluído');
+        if(synced) await pushCloudState();
+        toast(synced ? 'Boleto excluído' : 'Excluído neste aparelho; sincronização pendente');
       }
     };
   });
