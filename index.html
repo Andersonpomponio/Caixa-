@@ -924,10 +924,51 @@ function extractLinhaDigitavel(text){
       .replace(/[oOqQ]/g, '0')
       .replace(/[iIl|]/g, '1')
       .replace(/[^0-9]/g, '');
-    if(digits.length === 47 || digits.length === 48) candidates.add(digits);
+    // Às vezes o OCR inclui um dígito estranho antes ou depois da linha.
+    for(const size of [47, 48]){
+      for(let start=0; start<=digits.length-size; start++){
+        candidates.add(digits.slice(start, start+size));
+      }
+    }
   }
   const list = [...candidates];
   return list.find(isValidLinhaDigitavel) || list.find(digits => digits.length === 48) || null;
+}
+
+async function prepareBoletoImage(file){
+  const image = await new Promise((resolve, reject)=>{
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = ()=>{ URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error('Não consegui abrir a foto.')); };
+    img.src = url;
+  });
+  const targetWidth = Math.min(2200, Math.max(1400, image.naturalWidth));
+  const scale = targetWidth / image.naturalWidth;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(image.naturalWidth * scale);
+  canvas.height = Math.round(image.naturalHeight * scale);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.filter = 'grayscale(1) contrast(2.25) brightness(1.08)';
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+async function recognizeBoleto(file){
+  const image = await prepareBoletoImage(file);
+  const worker = await Tesseract.createWorker('por', 1);
+  try{
+    await worker.setParameters({
+      tessedit_char_whitelist: '0123456789.OQIl| -',
+      tessedit_pageseg_mode: '6',
+    });
+    const {data:{text}} = await worker.recognize(image);
+    return text;
+  }finally{
+    await worker.terminate();
+  }
 }
 
 function decodeLinhaDigitavel(digits){
@@ -988,10 +1029,10 @@ document.getElementById('fBoletoFile').onchange = async (e)=>{
   scanBtn.disabled = true;
   scanBtn.textContent = '🔎 Lendo boleto...';
   try{
-    const { data:{ text } } = await Tesseract.recognize(file, 'por');
+    const text = await recognizeBoleto(file);
     const digits = extractLinhaDigitavel(text);
     if(!digits){
-      toast('Não encontrei uma linha digitável válida na foto. Tente enquadrar somente os números.');
+      toast('Não encontrei uma linha válida. Aproxime a câmera e enquadre só a faixa dos números.');
       return;
     }
     document.getElementById('fLinhaDigitavel').value = digits;
