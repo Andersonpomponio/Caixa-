@@ -639,7 +639,7 @@ function exportBackup(){
   const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  const stamp = new Date().toISOString().slice(0,10);
+  const stamp = formatLocalDate(new Date());
   a.href = url;
   a.download = `backup-fluxo-caixa-${stamp}.json`;
   document.body.appendChild(a);
@@ -956,7 +956,7 @@ function renderBillPanel(){
       if(!bill) return;
       if(btn.dataset.action==='pay'){
         bill.paid = true;
-        bill.paidDate = new Date().toISOString().slice(0,10);
+        bill.paidDate = formatLocalDate(new Date());
         transactions.push({
           id: Date.now().toString(36)+Math.random().toString(36).slice(2,7),
           storeId: bill.storeId, type:'saida', category:'Boleto',
@@ -995,7 +995,7 @@ function openModal(){
   document.getElementById('fCategory').value = '';
   document.getElementById('fDesc').value = '';
   document.getElementById('fValue').value = '';
-  document.getElementById('fDate').value = new Date().toISOString().slice(0,10);
+  document.getElementById('fDate').value = formatLocalDate(new Date());
   document.getElementById('fLinhaDigitavel').value = '';
   setFormType('entrada');
   updateCatSuggestions();
