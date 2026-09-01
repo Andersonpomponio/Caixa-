@@ -478,6 +478,7 @@ let syncUser = null;
 let syncChannel = null;
 let syncTimer = null;
 let localChangeVersion = 0;
+let deletedTransactionIds = new Set();
 const LOGIN_USERS = {
   anderson: {name:'Anderson', email:'anderson@caixacentral.local'},
   luciane: {name:'Luciane', email:'luciane@caixacentral.local'},
@@ -540,10 +541,29 @@ function mergeById(remoteItems, localItems){
   (Array.isArray(localItems) ? localItems : []).forEach(item=>{ if(item && item.id) merged.set(item.id, item); });
   return [...merged.values()];
 }
+
+function normalizeTransactionDate(transaction){
+  if(!transaction || !transaction.id || !transaction.date) return transaction;
+  const createdAt = new Date(parseInt(String(transaction.id).slice(0, 8), 36));
+  if(Number.isNaN(createdAt.getTime())) return transaction;
+  const utcDate = createdAt.toISOString().slice(0, 10);
+  const localDate = formatLocalDate(createdAt);
+  // Corrige apenas o erro legado de UTC: preserva datas antigas escolhidas manualmente.
+  return transaction.date === utcDate && utcDate !== localDate
+    ? {...transaction, date:localDate}
+    : transaction;
+}
+
+function activeTransactions(items){
+  return (Array.isArray(items) ? items : [])
+    .filter(item=>item && !deletedTransactionIds.has(item.id))
+    .map(normalizeTransactionDate);
+}
+
 function mergedCloudPayload(cloudData){
   return {
     stores: mergeById(cloudData && cloudData.stores, stores),
-    transactions: mergeById(cloudData && cloudData.transactions, transactions),
+    transactions: activeTransactions(mergeById(cloudData && cloudData.transactions, transactions)),
     bills: mergeById(cloudData && cloudData.bills, bills),
   };
 }
@@ -561,12 +581,42 @@ function updateSyncUi(message){
 function applyCloudState(data){
   if(!data || !Array.isArray(data.stores) || !Array.isArray(data.transactions) || !Array.isArray(data.bills)) return false;
   stores = data.stores;
-  transactions = data.transactions;
+  transactions = activeTransactions(data.transactions);
   bills = data.bills;
   lsSet('stores', stores);
   lsSet('transactions', transactions);
   lsSet('bills', bills);
   render();
+  return true;
+}
+
+async function loadTransactionDeletions(){
+  if(!supabaseClient || !syncUser) return false;
+  const {data, error} = await supabaseClient
+    .from('shared_cash_transaction_deletions')
+    .select('id');
+  if(error){
+    updateSyncUi('Não consegui carregar as exclusões. Verifique a internet.');
+    return false;
+  }
+  (data || []).forEach(item=>deletedTransactionIds.add(item.id));
+  lsSet('deletedTransactionIds', [...deletedTransactionIds]);
+  transactions = activeTransactions(transactions);
+  lsSet('transactions', transactions);
+  return true;
+}
+
+async function recordTransactionDeletion(id){
+  deletedTransactionIds.add(id);
+  lsSet('deletedTransactionIds', [...deletedTransactionIds]);
+  if(!supabaseClient || !syncUser) return true;
+  const {error} = await supabaseClient
+    .from('shared_cash_transaction_deletions')
+    .insert({id});
+  if(error && error.code !== '23505'){
+    updateSyncUi('A exclusão ficou salva neste aparelho, mas ainda não sincronizou.');
+    return false;
+  }
   return true;
 }
 
@@ -625,12 +675,14 @@ async function startSync(user){
   // Um lançamento feito enquanto a nuvem está carregando é sempre mais novo
   // que a cópia recebida. Não deixe essa cópia antiga apagá-lo.
   const versionBeforeLoad = localChangeVersion;
+  await loadTransactionDeletions();
   const cloudState = await loadCloudState();
   let ready = true;
   if(localChangeVersion !== versionBeforeLoad){
     ready = await pushCloudState();
   }else if(cloudState && applyCloudState(cloudState)){
-    updateSyncUi();
+    // Também envia as correções de fuso e remove da cópia central os itens excluídos.
+    ready = await pushCloudState();
   }else{
     ready = await pushCloudState();
   }
@@ -639,6 +691,17 @@ async function startSync(user){
       event:'*', schema:'public', table:'shared_cash_state', filter:'id=eq.central',
     }, payload=>{
       if(payload.new && applyCloudState(payload.new.data)) updateSyncUi();
+    })
+    .on('postgres_changes', {
+      event:'INSERT', schema:'public', table:'shared_cash_transaction_deletions',
+    }, payload=>{
+      if(!payload.new || !payload.new.id) return;
+      deletedTransactionIds.add(payload.new.id);
+      lsSet('deletedTransactionIds', [...deletedTransactionIds]);
+      transactions = activeTransactions(transactions);
+      lsSet('transactions', transactions);
+      render();
+      updateSyncUi();
     })
     .subscribe(status=>{
       if(status === 'SUBSCRIBED') updateSyncUi();
@@ -715,7 +778,12 @@ function loadData(){
     lsSet('stores', stores);
   }
   const t = lsGet('transactions');
-  if(t) transactions = t;
+  const deleted = lsGet('deletedTransactionIds');
+  if(Array.isArray(deleted)) deletedTransactionIds = new Set(deleted);
+  if(t){
+    transactions = activeTransactions(t);
+    lsSet('transactions', transactions);
+  }
   const bl = lsGet('bills');
   if(bl) bills = bl;
   render();
@@ -1002,10 +1070,13 @@ function renderTxList(){
   }).join('');
   el.querySelectorAll('.tx-del').forEach(btn=>{
     btn.onclick = async ()=>{
-      transactions = transactions.filter(t=>t.id!==btn.dataset.id);
+      const id = btn.dataset.id;
+      transactions = transactions.filter(t=>t.id!==id);
       render();
-      await saveTransactions();
-      toast('Lançamento excluído');
+      saveTransactions();
+      const synced = await recordTransactionDeletion(id);
+      if(synced) await pushCloudState();
+      toast(synced ? 'Lançamento excluído' : 'Excluído neste aparelho; sincronização pendente');
     };
   });
 }
@@ -1125,6 +1196,10 @@ function setFormType(type){
   document.getElementById('typeOut').setAttribute('aria-pressed', type==='saida');
   document.getElementById('typeBill').setAttribute('aria-pressed', type==='boleto');
   document.getElementById('fDateLabel').textContent = type==='boleto' ? 'Vencimento' : 'Data';
+  const dateInput = document.getElementById('fDate');
+  const today = formatLocalDate(new Date());
+  dateInput.max = type==='boleto' ? '' : today;
+  if(type!=='boleto' && dateInput.value > today) dateInput.value = today;
   document.getElementById('modalTitle').textContent = type==='boleto' ? 'Novo boleto' : 'Novo lançamento';
   document.getElementById('fBoletoScanField').style.display = type==='boleto' ? 'block' : 'none';
   updateCatSuggestions();
@@ -1321,7 +1396,10 @@ document.getElementById('btnSave').onclick = async ()=>{
   const category = document.getElementById('fCategory').value.trim();
   const description = document.getElementById('fDesc').value.trim();
   const value = parseFloat(document.getElementById('fValue').value);
-  const date = document.getElementById('fDate').value;
+  const selectedDate = document.getElementById('fDate').value;
+  const today = formatLocalDate(new Date());
+  // Entradas e saídas nunca avançam para o dia seguinte por causa do UTC.
+  const date = formType==='boleto' ? selectedDate : (selectedDate > today ? today : selectedDate);
 
   if(!category){ toast('Informe a categoria'); return; }
   if(!value || value<=0){ toast('Informe um valor válido'); return; }
