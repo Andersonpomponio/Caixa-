@@ -353,8 +353,8 @@
     <h3 id="modalTitle" class="display">Novo lançamento</h3>
     <div class="toggle3">
       <button type="button" id="typeIn" class="on entrada">↑ Entrada</button>
-      <button type="button" id="typeOut">↓ Saída</button>
-      <button type="button" id="typeBill">🧾 Boleto</button>
+      <button type="button" id="typeOut" class="saida">↓ Saída</button>
+      <button type="button" id="typeBill" class="boleto">🧾 Boleto</button>
     </div>
     <div class="field" id="fBoletoScanField" style="display:none;margin-top:12px;">
       <button type="button" class="scan-btn" id="btnScanBoleto">📷 Ler boleto por foto</button>
@@ -445,8 +445,7 @@ let bills = [];
 let activeTab = 'all';
 let formType = 'entrada';
 let periodMode = 'month';
-let periodDate = new Date();
-periodDate.setHours(0,0,0,0);
+let periodDate = new Date(formatLocalDate(new Date()) + 'T00:00:00');
 
 const SUPABASE_URL = 'https://nynpmqlnxvmihusmfffo.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_p7L4enXB-29lvVO4gNegLA_UnIBtJty';
@@ -700,8 +699,7 @@ function importBackup(file){
 }
 
 function billDaysDiff(dueDate){
-  const today = new Date();
-  today.setHours(0,0,0,0);
+  const today = new Date(formatLocalDate(new Date())+'T00:00:00');
   const d = new Date(dueDate+'T00:00:00');
   return Math.round((d-today)/86400000);
 }
@@ -1037,6 +1035,9 @@ function setFormType(type){
   document.getElementById('typeIn').classList.toggle('on', type==='entrada');
   document.getElementById('typeOut').classList.toggle('on', type==='saida');
   document.getElementById('typeBill').classList.toggle('on', type==='boleto');
+  document.getElementById('typeIn').setAttribute('aria-pressed', type==='entrada');
+  document.getElementById('typeOut').setAttribute('aria-pressed', type==='saida');
+  document.getElementById('typeBill').setAttribute('aria-pressed', type==='boleto');
   document.getElementById('fDateLabel').textContent = type==='boleto' ? 'Vencimento' : 'Data';
   document.getElementById('modalTitle').textContent = type==='boleto' ? 'Novo boleto' : 'Novo lançamento';
   document.getElementById('fBoletoScanField').style.display = type==='boleto' ? 'block' : 'none';
@@ -1072,8 +1073,11 @@ function isValidLinhaDigitavel(digits){
 }
 
 function formatLocalDate(date){
-  const pad = n => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}`;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone:'America/Sao_Paulo', year:'numeric', month:'2-digit', day:'2-digit'
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
 }
 
 function extractLinhaDigitavel(text){
