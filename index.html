@@ -186,6 +186,7 @@
   /* boletos */
   .alert-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;}
   @media(min-width:420px){.alert-grid{grid-template-columns:repeat(4,1fr);}}
+  @media(min-width:420px){.alert-grid.paid{grid-template-columns:repeat(3,1fr);}}
   .alert-card{border-radius:12px;padding:10px;border:1px solid var(--line);background:var(--surface-2);}
   .alert-card .lbl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;opacity:.9;}
   .alert-card .val{font-family:'JetBrains Mono',monospace;font-size:14.5px;font-weight:700;margin-top:3px;}
@@ -194,6 +195,9 @@
   .alert-card.hoje{background:var(--gold-dim);color:var(--gold);border-color:transparent;}
   .alert-card.semana{background:var(--blue-dim);color:var(--blue);border-color:transparent;}
   .alert-card.mes{background:var(--teal-dim);color:var(--teal);border-color:transparent;}
+  .bill-view-tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:-3px 0 13px;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);}
+  .bill-view-tab{border:0;border-radius:9px;padding:9px 8px;background:transparent;color:var(--ink-soft);font:inherit;font-size:11.5px;font-weight:700;cursor:pointer;}
+  .bill-view-tab.on{background:var(--blue);color:#0A0A0B;box-shadow:0 5px 14px rgba(201,162,90,.2);}
 
   .bill-list{display:flex;flex-direction:column;gap:8px;margin-top:4px;}
   .bill{display:flex;align-items:center;gap:10px;padding:10px;border-radius:10px;background:var(--surface-2);border-left:3px solid var(--line);}
@@ -352,6 +356,10 @@
 
   <div class="panel">
     <h2 id="billTitle">Boletos</h2>
+    <div class="bill-view-tabs" role="tablist" aria-label="Situação dos boletos">
+      <button type="button" class="bill-view-tab on" id="billViewPending" role="tab">A vencer / vencidos</button>
+      <button type="button" class="bill-view-tab" id="billViewPaid" role="tab">Pagos</button>
+    </div>
     <div class="alert-grid" id="billAlerts"></div>
     <div class="bill-list" id="billList"></div>
   </div>
@@ -469,6 +477,7 @@ let bills = [];
 let activeTab = 'all';
 let formType = 'entrada';
 let periodMode = 'month';
+let billView = 'pending';
 let periodDate = new Date(formatLocalDate(new Date()) + 'T00:00:00');
 
 const SUPABASE_URL = 'https://nynpmqlnxvmihusmfffo.supabase.co';
@@ -1030,20 +1039,30 @@ function pendingBillsFor(storeId){
 }
 
 function periodBillsFor(storeId){
-  return pendingBillsFor(storeId).filter(b => isInSelectedPeriod(b.dueDate));
+  // Uma dívida vencida continua visível nos meses seguintes até ser paga.
+  return pendingBillsFor(storeId).filter(b => billDaysDiff(b.dueDate)<0 || isInSelectedPeriod(b.dueDate));
+}
+
+function paidBillsFor(storeId){
+  const list = bills.filter(b=>b.paid);
+  return storeId==='all' ? list : list.filter(b=>b.storeId===storeId);
+}
+
+function periodPaidBillsFor(storeId){
+  return paidBillsFor(storeId).filter(b => isInSelectedPeriod(b.paidDate || b.dueDate));
 }
 
 function renderTabs(){
   const tabs = document.getElementById('tabs');
   tabs.innerHTML = '';
-  const allUrgent = periodBillsFor('all').filter(b=>billDaysDiff(b.dueDate)<=0).length;
+  const allUrgent = pendingBillsFor('all').filter(b=>billDaysDiff(b.dueDate)<=0).length;
   const allTab = document.createElement('button');
   allTab.className = 'tab' + (activeTab==='all' ? ' active' : '');
   allTab.innerHTML = 'Consolidado' + (allUrgent>0 ? `<span class="tab-badge">${allUrgent}</span>` : '');
   allTab.onclick = ()=>{activeTab='all'; render();};
   tabs.appendChild(allTab);
   stores.forEach(st=>{
-    const urgent = periodBillsFor(st.id).filter(b=>billDaysDiff(b.dueDate)<=0).length;
+    const urgent = pendingBillsFor(st.id).filter(b=>billDaysDiff(b.dueDate)<=0).length;
     const b = document.createElement('button');
     b.className = 'tab' + (activeTab===st.id ? ' active' : '');
     b.innerHTML = st.name + (urgent>0 ? `<span class="tab-badge">${urgent}</span>` : '');
@@ -1222,21 +1241,40 @@ function renderTxList(){
 }
 
 function renderBillPanel(){
-  const list = periodBillsFor(activeTab);
+  const pendingList = periodBillsFor(activeTab);
+  const paidList = periodPaidBillsFor(activeTab);
+  const list = billView==='paid' ? paidList : pendingList;
+  const pendingButton = document.getElementById('billViewPending');
+  const paidButton = document.getElementById('billViewPaid');
+  pendingButton.classList.toggle('on', billView==='pending');
+  paidButton.classList.toggle('on', billView==='paid');
+  pendingButton.setAttribute('aria-selected', billView==='pending');
+  paidButton.setAttribute('aria-selected', billView==='paid');
+  pendingButton.textContent = `A vencer / vencidos (${pendingList.length})`;
+  paidButton.textContent = `Pagos (${paidList.length})`;
 
-  const vencidos = list.filter(b=>billDaysDiff(b.dueDate)<0);
-  const hoje = list.filter(b=>billDaysDiff(b.dueDate)===0);
-  const aVencer = list.filter(b=>billDaysDiff(b.dueDate)>0);
-
+  const vencidos = pendingList.filter(b=>billDaysDiff(b.dueDate)<0);
+  const hoje = pendingList.filter(b=>billDaysDiff(b.dueDate)===0);
+  const aVencer = pendingList.filter(b=>billDaysDiff(b.dueDate)>0);
+  const pagosEmDia = paidList.filter(b=>(b.paidDate || b.dueDate)<=b.dueDate);
+  const pagosAtrasados = paidList.filter(b=>(b.paidDate || b.dueDate)>b.dueDate);
   const sum = arr => arr.reduce((a,b)=>a+b.value,0);
-  const cards = [
-    {cls:'mes', label:'No período', arr:list},
-    {cls:'vencido', label:'Vencidos', arr:vencidos},
-    {cls:'hoje', label:'Vence hoje', arr:hoje},
-    {cls:'semana', label:'A vencer', arr:aVencer},
-  ];
+  const cards = billView==='paid'
+    ? [
+      {cls:'mes', label:'Pagos no período', arr:paidList},
+      {cls:'semana', label:'Pagos em dia', arr:pagosEmDia},
+      {cls:'vencido', label:'Pagos em atraso', arr:pagosAtrasados},
+    ]
+    : [
+      {cls:'mes', label:'Total em aberto', arr:pendingList},
+      {cls:'vencido', label:'Vencidos', arr:vencidos},
+      {cls:'hoje', label:'Vence hoje', arr:hoje},
+      {cls:'semana', label:'A vencer', arr:aVencer},
+    ];
   document.getElementById('billTitle').textContent = 'Boletos — ' + periodLabel();
-  document.getElementById('billAlerts').innerHTML = cards.map(c=>`
+  const alerts = document.getElementById('billAlerts');
+  alerts.classList.toggle('paid', billView==='paid');
+  alerts.innerHTML = cards.map(c=>`
     <div class="alert-card ${c.cls}">
       <div class="lbl">${c.label}</div>
       <div class="val">${fmt(sum(c.arr))}</div>
@@ -1244,32 +1282,38 @@ function renderBillPanel(){
     </div>
   `).join('');
 
-  const sorted = list.slice().sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
+  const sorted = list.slice().sort((a,b)=> billView==='paid'
+    ? (b.paidDate || b.dueDate).localeCompare(a.paidDate || a.dueDate)
+    : a.dueDate.localeCompare(b.dueDate));
   const billListEl = document.getElementById('billList');
   if(sorted.length===0){
-    billListEl.innerHTML = '<div class="empty">Nenhum boleto pendente.</div>';
+    billListEl.innerHTML = `<div class="empty">${billView==='paid' ? 'Nenhum boleto pago neste período.' : 'Nenhum boleto em aberto neste período.'}</div>`;
     return;
   }
   billListEl.innerHTML = sorted.map(b=>{
     const st = stores.find(s=>s.id===b.storeId);
     const diff = billDaysDiff(b.dueDate);
-    const isLate = diff<0, isToday = diff===0;
+    const isLate = billView==='pending' && diff<0;
+    const isToday = billView==='pending' && diff===0;
     const d = new Date(b.dueDate+'T00:00:00');
     const dateStr = d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
     let statusTxt;
-    if(isLate) statusTxt = `Vencido há ${Math.abs(diff)} dia${Math.abs(diff)===1?'':'s'}`;
+    if(billView==='paid'){
+      const paidDate = new Date((b.paidDate || b.dueDate)+'T00:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
+      statusTxt = `Venceu em ${dateStr} · Pago em ${paidDate}`;
+    }else if(isLate) statusTxt = `Vencido há ${Math.abs(diff)} dia${Math.abs(diff)===1?'':'s'}`;
     else if(isToday) statusTxt = 'Vence hoje';
     else statusTxt = `Vence em ${diff} dia${diff===1?'':'s'}`;
     return `<div class="bill ${isLate?'is-late':isToday?'is-today':''}">
       <div class="bill-mid">
         <div class="bill-desc">${b.description}</div>
-        <div class="bill-meta ${isLate?'is-late':isToday?'is-today':''}">${dateStr} · ${statusTxt}${activeTab==='all' && st ? ' · '+st.name : ''}</div>
+        <div class="bill-meta ${isLate?'is-late':isToday?'is-today':''}">${billView==='paid' ? statusTxt : dateStr+' · '+statusTxt}${activeTab==='all' && st ? ' · '+st.name : ''}</div>
       </div>
       <div class="bill-val">${fmt(b.value)}</div>
-      <div class="bill-actions">
+      ${billView==='pending' ? `<div class="bill-actions">
         <button class="bill-btn pay" data-id="${b.id}" data-action="pay" aria-label="Marcar como pago">✓</button>
         <button class="bill-btn" data-id="${b.id}" data-action="del" aria-label="Excluir">✕</button>
-      </div>
+      </div>` : ''}
     </div>`;
   }).join('');
 
@@ -1519,6 +1563,8 @@ document.getElementById('typeOut').onclick = ()=>setFormType('saida');
 document.getElementById('typeBill').onclick = ()=>setFormType('boleto');
 document.getElementById('periodMonth').onclick = ()=>{ periodMode='month'; render(); };
 document.getElementById('periodWeek').onclick = ()=>{ periodMode='week'; render(); };
+document.getElementById('billViewPending').onclick = ()=>{ billView='pending'; renderBillPanel(); };
+document.getElementById('billViewPaid').onclick = ()=>{ billView='paid'; renderBillPanel(); };
 document.getElementById('periodPrev').onclick = ()=>{
   if(periodMode==='month') periodDate.setMonth(periodDate.getMonth()-1);
   else periodDate.setDate(periodDate.getDate()-7);
