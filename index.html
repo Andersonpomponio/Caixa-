@@ -973,9 +973,14 @@ function renderCashChart(){
 function renderTxList(){
   const title = document.getElementById('txTitle');
   const storeName = activeTab==='all' ? 'todas as unidades' : (stores.find(s=>s.id===activeTab)||{}).name;
-  title.textContent = 'Lançamentos — ' + storeName + ' · ' + periodLabel();
+  title.textContent = 'Lançamentos — ' + storeName;
 
-  const list = filteredTx().slice().sort((a,b)=> b.date.localeCompare(a.date));
+  // A lista é o histórico da unidade. Os filtros mensal/semanal ficam nos
+  // totais, gráficos e boletos, para um lançamento nunca parecer apagado
+  // apenas por estar fora do período que está sendo analisado.
+  const list = (activeTab==='all' ? transactions : transactions.filter(t=>t.storeId===activeTab))
+    .slice()
+    .sort((a,b)=> b.date.localeCompare(a.date));
   const el = document.getElementById('txList');
   if(list.length===0){
     el.innerHTML = '<div class="empty">Nenhum lançamento ainda. Toque em + para adicionar.</div>';
