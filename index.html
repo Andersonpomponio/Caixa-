@@ -286,6 +286,7 @@
       <p id="subtitle">3 óticas + Pessoa Física</p>
     </div>
     <div class="header-actions">
+      <button class="gear" id="btnRefresh" aria-label="Atualizar painel" title="Atualizar">↻</button>
       <button class="gear" id="btnTheme" aria-label="Alternar modo escuro">🌙</button>
       <button class="gear" id="btnSettings" aria-label="Configurações">⚙</button>
     </div>
@@ -455,6 +456,7 @@ const supabaseClient = window.supabase
 let syncUser = null;
 let syncChannel = null;
 let syncTimer = null;
+let localChangeVersion = 0;
 
 const fmt = v => v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const toast = msg => {
@@ -536,13 +538,9 @@ async function loadCloudState(){
   const {data, error} = await supabaseClient.from('app_state').select('data').eq('user_id', syncUser.id).maybeSingle();
   if(error){
     updateSyncUi('Não consegui acessar a sincronização. Verifique a internet.');
-    return;
+    return null;
   }
-  if(data && applyCloudState(data.data)){
-    updateSyncUi();
-  }else{
-    await pushCloudState();
-  }
+  return data ? data.data : null;
 }
 
 async function startSync(user){
@@ -551,7 +549,17 @@ async function startSync(user){
   if(syncChannel) await syncChannel.unsubscribe();
   syncUser = user;
   updateSyncUi('Conectando a sincronização…');
-  await loadCloudState();
+  // Um lançamento feito enquanto a nuvem está carregando é sempre mais novo
+  // que a cópia recebida. Não deixe essa cópia antiga apagá-lo.
+  const versionBeforeLoad = localChangeVersion;
+  const cloudState = await loadCloudState();
+  if(localChangeVersion !== versionBeforeLoad){
+    await pushCloudState();
+  }else if(cloudState && applyCloudState(cloudState)){
+    updateSyncUi();
+  }else{
+    await pushCloudState();
+  }
   syncChannel = supabaseClient.channel(`app-state-${user.id}`)
     .on('postgres_changes', {
       event:'*', schema:'public', table:'app_state', filter:`user_id=eq.${user.id}`,
@@ -601,6 +609,21 @@ document.getElementById('btnTheme').onclick = ()=>{
   applyTheme(next);
   lsSet('theme', next);
 };
+document.getElementById('btnRefresh').onclick = async ()=>{
+  const button = document.getElementById('btnRefresh');
+  button.disabled = true;
+  button.textContent = '↻';
+  toast('Atualizando painel…');
+  try{
+    if('serviceWorker' in navigator){
+      const registration = await navigator.serviceWorker.getRegistration();
+      if(registration) await registration.update();
+    }
+  }catch(e){}
+  const url = new URL(window.location.href);
+  url.searchParams.set('atualizado', Date.now().toString());
+  window.location.replace(url.toString());
+};
 loadTheme();
 
 function loadData(){
@@ -619,18 +642,24 @@ function loadData(){
 }
 
 function saveStores(){
-  if(!lsSet('stores', stores)) toast('Erro ao salvar nomes');
+  const saved = lsSet('stores', stores);
+  if(saved) localChangeVersion++;
   scheduleCloudSync();
+  return saved;
 }
 
 function saveTransactions(){
-  if(!lsSet('transactions', transactions)) toast('Erro ao salvar. Espaço cheio?');
+  const saved = lsSet('transactions', transactions);
+  if(saved) localChangeVersion++;
   scheduleCloudSync();
+  return saved;
 }
 
 function saveBills(){
-  if(!lsSet('bills', bills)) toast('Erro ao salvar boletos. Espaço cheio?');
+  const saved = lsSet('bills', bills);
+  if(saved) localChangeVersion++;
   scheduleCloudSync();
+  return saved;
 }
 
 // Exportar / Importar dados (para compartilhar entre o celular do casal)
@@ -1227,8 +1256,8 @@ document.getElementById('btnSave').onclick = async ()=>{
   transactions.push(tx);
   closeModal();
   render();
-  await saveTransactions();
-  toast('Lançamento salvo');
+  const saved = saveTransactions();
+  toast(saved ? 'Lançamento salvo' : 'Não foi possível salvar neste aparelho');
 };
 
 // Settings modal
