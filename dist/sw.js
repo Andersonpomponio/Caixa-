@@ -1,4 +1,4 @@
-const CACHE_NAME = 'otica-central-v13';
+const CACHE_NAME = 'otica-central-v14';
 const APP_SHELL = [
   './',
   './index.html',
