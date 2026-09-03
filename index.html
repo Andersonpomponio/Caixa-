@@ -224,6 +224,23 @@
   .scan-btn:disabled{opacity:.6;cursor:default;}
   .scan-hint{font-size:10.5px;color:var(--ink-soft);margin-top:5px;text-align:center;}
 
+  .barcode-camera{position:fixed;inset:0;z-index:80;background:#050505;display:none;flex-direction:column;color:#fff;}
+  .barcode-camera.show{display:flex;}
+  .camera-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:#080808;}
+  .camera-head strong{font-size:15px;}
+  .camera-close{width:38px;height:38px;border-radius:50%;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.1);color:#fff;font-size:21px;}
+  .camera-stage{position:relative;flex:1;min-height:0;overflow:hidden;background:#000;}
+  .camera-stage video{width:100%;height:100%;object-fit:cover;display:block;}
+  .camera-shade{position:absolute;inset:0;background:linear-gradient(to bottom,rgba(0,0,0,.55) 0 35%,transparent 35% 63%,rgba(0,0,0,.55) 63% 100%);pointer-events:none;}
+  .camera-guide{position:absolute;left:4%;right:4%;top:35%;height:28%;border:3px solid #E7C568;border-radius:14px;box-shadow:0 0 22px rgba(231,197,104,.45);pointer-events:none;}
+  .camera-guide::before{content:'ALINHE TODAS AS BARRAS AQUI';position:absolute;left:50%;top:-31px;transform:translateX(-50%);white-space:nowrap;color:#fff;font-size:11px;font-weight:800;letter-spacing:.05em;text-shadow:0 1px 4px #000;}
+  .camera-line{position:absolute;left:4%;right:4%;top:50%;height:2px;background:#E7C568;box-shadow:0 0 10px #E7C568;}
+  .camera-help{text-align:center;font-size:12px;line-height:1.45;padding:10px 18px 0;color:rgba(255,255,255,.78);background:#080808;}
+  .camera-actions{display:flex;gap:10px;padding:12px 16px calc(14px + env(safe-area-inset-bottom));background:#080808;}
+  .camera-actions button{min-height:48px;border-radius:12px;font-weight:800;font-size:14px;}
+  .camera-capture{flex:1;border:0;background:#E7C568;color:#0A0A0B;}
+  .camera-photo{border:1px solid rgba(255,255,255,.28);background:#181818;color:#fff;padding:0 14px;}
+
   .scan-or{display:flex;align-items:center;gap:8px;margin:10px 0;}
   .scan-or::before, .scan-or::after{content:'';flex:1;height:1px;background:var(--line);}
   .scan-or span{font-size:10.5px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.06em;}
@@ -402,7 +419,7 @@
     </div>
     <div class="field" id="fBoletoScanField" style="display:none;margin-top:12px;">
       <button type="button" class="scan-btn" id="btnScanBarcode">▥ Ler código de barras</button>
-      <div class="scan-hint">Fotografe somente as barras, inteiras, na horizontal e com boa iluminação</div>
+      <div class="scan-hint">Abra a câmera e alinhe todas as barras dentro da moldura dourada</div>
       <input type="file" id="fBarcodeFile" accept="image/*" capture="environment" style="display:none;">
       <div class="scan-or"><span>ou</span></div>
       <div class="paste-row">
@@ -435,6 +452,23 @@
       <button class="btn btn-ghost" id="btnCancel">Cancelar</button>
       <button class="btn btn-primary" id="btnSave">Salvar</button>
     </div>
+  </div>
+</div>
+
+<div class="barcode-camera" id="barcodeCamera" aria-hidden="true">
+  <div class="camera-head">
+    <strong>Enquadrar código de barras</strong>
+    <button type="button" class="camera-close" id="btnCloseBarcodeCamera" aria-label="Fechar câmera">×</button>
+  </div>
+  <div class="camera-stage">
+    <video id="barcodeVideo" autoplay muted playsinline></video>
+    <div class="camera-shade"></div>
+    <div class="camera-guide"><span class="camera-line"></span></div>
+  </div>
+  <div class="camera-help">Deixe as barras inteiras dentro da moldura, sem cortar as pontas e sem reflexo.</div>
+  <div class="camera-actions">
+    <button type="button" class="camera-photo" id="btnChooseBarcodePhoto">Escolher foto</button>
+    <button type="button" class="camera-capture" id="btnCaptureBarcode">Capturar e ler</button>
   </div>
 </div>
 
@@ -1584,6 +1618,7 @@ function openModal(){
   overlay.classList.add('show');
 }
 function closeModal(){
+  stopBarcodeCamera();
   overlay.classList.remove('show');
 }
 
@@ -1716,6 +1751,10 @@ document.getElementById('btnUseLinha').onclick = ()=>{
 
 const barcodeBtn = document.getElementById('btnScanBarcode');
 const barcodeFile = document.getElementById('fBarcodeFile');
+const barcodeCamera = document.getElementById('barcodeCamera');
+const barcodeVideo = document.getElementById('barcodeVideo');
+const barcodeCaptureBtn = document.getElementById('btnCaptureBarcode');
+let barcodeStream = null;
 
 function imageFileToCanvas(file){
   return new Promise((resolve, reject)=>{
@@ -1851,9 +1890,37 @@ async function readBarcodeImage(file){
   throw lastError || new Error('Código não encontrado.');
 }
 
-barcodeBtn.onclick = ()=> barcodeFile.click();
-barcodeFile.onchange = async event=>{
-  const file = event.target.files[0];
+function stopBarcodeCamera(){
+  if(barcodeStream) barcodeStream.getTracks().forEach(track=>track.stop());
+  barcodeStream = null;
+  barcodeVideo.srcObject = null;
+  barcodeCamera.classList.remove('show');
+  barcodeCamera.setAttribute('aria-hidden','true');
+}
+
+async function openBarcodeCamera(){
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    barcodeFile.click();
+    return;
+  }
+  barcodeCamera.classList.add('show');
+  barcodeCamera.setAttribute('aria-hidden','false');
+  try{
+    barcodeStream = await navigator.mediaDevices.getUserMedia({
+      audio:false,
+      video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}
+    });
+    barcodeVideo.srcObject = barcodeStream;
+    await barcodeVideo.play();
+  }catch(error){
+    console.warn('Câmera interna indisponível:', error);
+    stopBarcodeCamera();
+    toast('A câmera interna não abriu. Use a opção de foto do aparelho.');
+    barcodeFile.click();
+  }
+}
+
+async function processBarcodeFile(file){
   if(!file) return;
   barcodeBtn.disabled = true;
   barcodeBtn.textContent = '▥ Lendo código...';
@@ -1877,9 +1944,50 @@ barcodeFile.onchange = async event=>{
   }finally{
     barcodeBtn.disabled = false;
     barcodeBtn.textContent = '▥ Ler código de barras';
-    event.target.value = '';
   }
+}
+
+barcodeBtn.onclick = openBarcodeCamera;
+document.getElementById('btnCloseBarcodeCamera').onclick = stopBarcodeCamera;
+document.getElementById('btnChooseBarcodePhoto').onclick = ()=>{
+  stopBarcodeCamera();
+  barcodeFile.click();
 };
+barcodeCaptureBtn.onclick = async ()=>{
+  if(!barcodeVideo.videoWidth || !barcodeVideo.videoHeight){
+    toast('A câmera ainda está iniciando. Aguarde um instante.');
+    return;
+  }
+  barcodeCaptureBtn.disabled = true;
+  barcodeCaptureBtn.textContent = 'Capturando...';
+  const canvas = document.createElement('canvas');
+  const width = barcodeVideo.videoWidth;
+  const height = barcodeVideo.videoHeight;
+  const sourceX = Math.round(width * 0.04);
+  const sourceY = Math.round(height * 0.35);
+  const sourceWidth = Math.round(width * 0.92);
+  const sourceHeight = Math.round(height * 0.28);
+  canvas.width = sourceWidth;
+  canvas.height = sourceHeight;
+  canvas.getContext('2d').drawImage(
+    barcodeVideo, sourceX, sourceY, sourceWidth, sourceHeight,
+    0, 0, sourceWidth, sourceHeight
+  );
+  const blob = await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',0.94));
+  stopBarcodeCamera();
+  barcodeCaptureBtn.disabled = false;
+  barcodeCaptureBtn.textContent = 'Capturar e ler';
+  if(blob) await processBarcodeFile(new File([blob],'codigo-barras.jpg',{type:'image/jpeg'}));
+};
+barcodeFile.onchange = async event=>{
+  const file = event.target.files[0];
+  event.target.value = '';
+  await processBarcodeFile(file);
+};
+window.addEventListener('pagehide', stopBarcodeCamera);
+document.addEventListener('visibilitychange', ()=>{
+  if(document.hidden) stopBarcodeCamera();
+});
 document.getElementById('typeIn').onclick = ()=>setFormType('entrada');
 document.getElementById('typeOut').onclick = ()=>setFormType('saida');
 document.getElementById('typeBill').onclick = ()=>setFormType('boleto');
