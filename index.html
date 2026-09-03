@@ -577,11 +577,23 @@ function activeBills(items){
     .filter(item=>item && !deletedBillIds.has(item.id));
 }
 
+function mergeBillVersions(remoteItems, localItems){
+  const merged = new Map();
+  activeBills(remoteItems).forEach(item=>merged.set(item.id, item));
+  activeBills(localItems).forEach(item=>{
+    const current = merged.get(item.id);
+    if(!current || (item.updatedAt && (!current.updatedAt || item.updatedAt >= current.updatedAt))){
+      merged.set(item.id, item);
+    }
+  });
+  return [...merged.values()];
+}
+
 function mergedCloudPayload(cloudData){
   return {
     stores: mergeById(cloudData && cloudData.stores, stores),
     transactions: activeTransactions(mergeById(cloudData && cloudData.transactions, transactions)),
-    bills: activeBills(mergeById(cloudData && cloudData.bills, bills)),
+    bills: mergeBillVersions(cloudData && cloudData.bills, bills),
   };
 }
 
@@ -598,7 +610,8 @@ function updateSyncUi(message){
 function applyCloudState(data){
   if(!data || !Array.isArray(data.stores) || !Array.isArray(data.bills)) return false;
   stores = data.stores;
-  bills = activeBills(data.bills);
+  // O bloco antigo continua compatível, mas nunca pode apagar um boleto local mais novo.
+  bills = mergeBillVersions(data.bills, bills);
   lsSet('stores', stores);
   lsSet('bills', bills);
   render();
@@ -630,6 +643,37 @@ function cloudRowToTransaction(row){
     value: Number(row.value),
     date: row.transaction_date,
   });
+}
+
+function billToCloudRow(bill){
+  return {
+    id: bill.id,
+    store_id: bill.storeId,
+    category: bill.category || '',
+    description: bill.description || '',
+    value: Number(bill.value),
+    due_date: bill.dueDate,
+    paid: Boolean(bill.paid),
+    paid_date: bill.paidDate || null,
+    payment_transaction_id: bill.paymentTransactionId || null,
+    updated_at: bill.updatedAt || new Date().toISOString(),
+    deleted_at: null,
+  };
+}
+
+function cloudRowToBill(row){
+  return {
+    id: row.id,
+    storeId: row.store_id,
+    category: row.category || '',
+    description: row.description || '',
+    value: Number(row.value),
+    dueDate: row.due_date,
+    paid: Boolean(row.paid),
+    paidDate: row.paid_date || undefined,
+    paymentTransactionId: row.payment_transaction_id || undefined,
+    updatedAt: row.updated_at,
+  };
 }
 
 async function upsertCloudTransactions(items){
@@ -670,6 +714,75 @@ async function loadCloudTransactions(){
   render();
   if(pendingLocal.length) await upsertCloudTransactions(pendingLocal);
   return true;
+}
+
+async function upsertCloudBills(items){
+  const pending = activeBills(items);
+  if(!pending.length) return true;
+  if(!supabaseClient || !syncUser) return false;
+  const {error} = await supabaseClient
+    .from('shared_cash_bills')
+    .upsert(pending.map(billToCloudRow), {onConflict:'id'});
+  if(error){
+    updateSyncUi('Boleto salvo neste aparelho; sincronização pendente.');
+    return false;
+  }
+  updateSyncUi('Boletos sincronizados.');
+  return true;
+}
+
+async function loadCloudBills(){
+  if(!supabaseClient || !syncUser) return false;
+  const {data, error} = await supabaseClient
+    .from('shared_cash_bills')
+    .select('id,store_id,category,description,value,due_date,paid,paid_date,payment_transaction_id,updated_at,deleted_at');
+  if(error){
+    updateSyncUi('Não consegui carregar os boletos. Verifique a internet.');
+    return false;
+  }
+  const rows = data || [];
+  rows.filter(row=>row.deleted_at).forEach(row=>deletedBillIds.add(row.id));
+  const remoteBills = rows
+    .filter(row=>!row.deleted_at && !deletedBillIds.has(row.id))
+    .map(cloudRowToBill);
+  const remoteById = new Map(remoteBills.map(item=>[item.id, item]));
+  bills = mergeBillVersions(remoteBills, bills);
+  const pendingLocal = bills.filter(item=>{
+    const remote = remoteById.get(item.id);
+    return !remote || (item.updatedAt && item.updatedAt > remote.updatedAt);
+  });
+  lsSet('deletedBillIds', [...deletedBillIds]);
+  lsSet('bills', bills);
+  render();
+  if(pendingLocal.length) await upsertCloudBills(pendingLocal);
+  return true;
+}
+
+async function markCloudBillDeleted(id){
+  if(!supabaseClient || !syncUser) return false;
+  const {error} = await supabaseClient
+    .from('shared_cash_bills')
+    .update({deleted_at:new Date().toISOString(), updated_at:new Date().toISOString()})
+    .eq('id', id);
+  if(error){
+    updateSyncUi('A exclusão do boleto ficou salva neste aparelho; sincronização pendente.');
+    return false;
+  }
+  return true;
+}
+
+function applyCloudBillChange(payload){
+  const row = payload.new;
+  if(!row || !row.id) return;
+  if(row.deleted_at || deletedBillIds.has(row.id)){
+    bills = bills.filter(item=>item.id!==row.id);
+  }else{
+    const incoming = cloudRowToBill(row);
+    bills = mergeBillVersions([incoming], bills);
+  }
+  lsSet('bills', bills);
+  render();
+  updateSyncUi();
 }
 
 async function markCloudTransactionDeleted(id){
@@ -771,6 +884,13 @@ async function loadBillDeletions(){
   lsSet('deletedBillIds', [...deletedBillIds]);
   bills = activeBills(bills);
   lsSet('bills', bills);
+  if(deletedBillIds.size){
+    const now = new Date().toISOString();
+    await supabaseClient
+      .from('shared_cash_bills')
+      .update({deleted_at:now, updated_at:now})
+      .in('id', [...deletedBillIds]);
+  }
   return true;
 }
 
@@ -854,6 +974,7 @@ async function startSync(user){
     ready = await pushCloudState();
   }
   await loadCloudTransactions();
+  await loadCloudBills();
   syncChannel = supabaseClient.channel('shared-cash-central')
     .on('postgres_changes', {
       event:'*', schema:'public', table:'shared_cash_state', filter:'id=eq.central',
@@ -874,15 +995,19 @@ async function startSync(user){
     })
     .on('postgres_changes', {
       event:'INSERT', schema:'public', table:'shared_cash_bill_deletions',
-    }, payload=>{
+    }, async payload=>{
       if(!payload.new || !payload.new.id) return;
       deletedBillIds.add(payload.new.id);
       lsSet('deletedBillIds', [...deletedBillIds]);
       bills = activeBills(bills);
       lsSet('bills', bills);
+      await markCloudBillDeleted(payload.new.id);
       render();
       updateSyncUi();
     })
+    .on('postgres_changes', {
+      event:'*', schema:'public', table:'shared_cash_bills',
+    }, applyCloudBillChange)
     .on('postgres_changes', {
       event:'*', schema:'public', table:'shared_cash_transactions',
     }, applyCloudTransactionChange)
@@ -1388,23 +1513,33 @@ function renderBillPanel(){
       if(btn.dataset.action==='pay'){
         bill.paid = true;
         bill.paidDate = formatLocalDate(new Date());
+        bill.updatedAt = new Date().toISOString();
         const paidTransaction = {
           id: Date.now().toString(36)+Math.random().toString(36).slice(2,7),
           storeId: bill.storeId, type:'saida', category:'Boleto',
           description: bill.description, value: bill.value, date: bill.paidDate
         };
+        bill.paymentTransactionId = paidTransaction.id;
         transactions.push(paidTransaction);
         render();
         await saveBills();
         saveTransactions();
-        const synced = await upsertCloudTransactions([paidTransaction]);
+        const [billSynced, transactionSynced] = await Promise.all([
+          upsertCloudBills([bill]),
+          upsertCloudTransactions([paidTransaction]),
+        ]);
+        const synced = billSynced && transactionSynced;
         toast(synced ? 'Boleto marcado como pago' : 'Pagamento salvo; sincronização pendente.');
       }else{
         bills = bills.filter(b=>b.id!==id);
-        const synced = await recordBillDeletion(id);
         render();
         await saveBills();
-        if(synced) await pushCloudState();
+        const [deletionRecorded, rowDeleted] = await Promise.all([
+          recordBillDeletion(id),
+          markCloudBillDeleted(id),
+        ]);
+        if(deletionRecorded) await pushCloudState();
+        const synced = deletionRecorded && rowDeleted;
         toast(synced ? 'Boleto excluído' : 'Excluído neste aparelho; sincronização pendente');
       }
     };
@@ -1659,14 +1794,17 @@ document.getElementById('btnSave').onclick = async ()=>{
   if(!date){ toast(formType==='boleto' ? 'Informe o vencimento' : 'Informe a data'); return; }
 
   if(formType==='boleto'){
-    bills.push({
+    const bill = {
       id: Date.now().toString(36)+Math.random().toString(36).slice(2,7),
-      storeId, description: description || category, category, value, dueDate: date, paid:false
-    });
+      storeId, description: description || category, category, value, dueDate: date, paid:false,
+      updatedAt: new Date().toISOString()
+    };
+    bills.push(bill);
     closeModal();
     render();
     await saveBills();
-    toast('Boleto adicionado');
+    const synced = await upsertCloudBills([bill]);
+    toast(synced ? 'Boleto salvo e sincronizado' : 'Boleto salvo; sincronização pendente.');
     return;
   }
 
