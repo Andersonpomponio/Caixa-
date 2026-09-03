@@ -1724,7 +1724,7 @@ function imageFileToCanvas(file){
     image.onload = ()=>{
       URL.revokeObjectURL(url);
       const longSide = Math.max(image.naturalWidth, image.naturalHeight);
-      const scale = Math.min(1, 2400 / longSide);
+      const scale = Math.min(1, 1800 / longSide);
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
       canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
@@ -1755,20 +1755,97 @@ function rotateBarcodeCanvas(source, clockwise){
   return canvas;
 }
 
+function cropBarcodeCanvas(source, topRatio, heightRatio){
+  const sourceY = Math.max(0, Math.round(source.height * topRatio));
+  const sourceHeight = Math.min(source.height - sourceY, Math.round(source.height * heightRatio));
+  const canvas = document.createElement('canvas');
+  canvas.width = source.width;
+  canvas.height = Math.max(1, sourceHeight);
+  canvas.getContext('2d').drawImage(
+    source, 0, sourceY, source.width, sourceHeight,
+    0, 0, canvas.width, canvas.height
+  );
+  return canvas;
+}
+
+function enhanceBarcodeCanvas(source, binary=false){
+  const canvas = document.createElement('canvas');
+  canvas.width = source.width;
+  canvas.height = source.height;
+  const context = canvas.getContext('2d', {willReadFrequently:true});
+  context.drawImage(source, 0, 0);
+  const image = context.getImageData(0, 0, canvas.width, canvas.height);
+  const pixels = image.data;
+  const histogram = new Uint32Array(256);
+  for(let index=0; index<pixels.length; index+=4){
+    const gray = Math.round(pixels[index]*0.299 + pixels[index+1]*0.587 + pixels[index+2]*0.114);
+    histogram[gray]++;
+  }
+  const total = canvas.width * canvas.height;
+  let low=0, high=255, accumulated=0;
+  while(low<255 && (accumulated+=histogram[low]) < total*0.02) low++;
+  accumulated=0;
+  while(high>0 && (accumulated+=histogram[high]) < total*0.02) high--;
+  const range = Math.max(1, high-low);
+  for(let index=0; index<pixels.length; index+=4){
+    const gray = Math.round(pixels[index]*0.299 + pixels[index+1]*0.587 + pixels[index+2]*0.114);
+    let adjusted = Math.max(0, Math.min(255, Math.round((gray-low)*255/range)));
+    if(binary) adjusted = adjusted < 145 ? 0 : 255;
+    pixels[index] = pixels[index+1] = pixels[index+2] = adjusted;
+  }
+  context.putImageData(image, 0, 0);
+  return canvas;
+}
+
+async function readWithNativeBarcodeDetector(canvas){
+  if(!('BarcodeDetector' in window)) return null;
+  try{
+    const supported = await BarcodeDetector.getSupportedFormats();
+    const formats = ['itf','itf14'].filter(format=>supported.includes(format));
+    if(!formats.length) return null;
+    const detector = new BarcodeDetector({formats});
+    const results = await detector.detect(canvas);
+    for(const result of results){
+      const digits = String(result.rawValue || '').replace(/\D/g,'');
+      if(digits.length===44) return digits;
+    }
+  }catch(error){
+    console.warn('Leitor nativo indisponível:', error);
+  }
+  return null;
+}
+
 async function readBarcodeImage(file){
   if(!window.ZXingBrowser) throw new Error('Leitor indisponível. Verifique a internet.');
   const source = await imageFileToCanvas(file);
-  const reader = new ZXingBrowser.BrowserMultiFormatReader();
-  reader.possibleFormats = [ZXingBrowser.BarcodeFormat.ITF];
-  const attempts = [source, rotateBarcodeCanvas(source, true), rotateBarcodeCanvas(source, false)];
+  const nativeResult = await readWithNativeBarcodeDetector(source);
+  if(nativeResult) return nativeResult;
+  let reader;
+  if(ZXingBrowser.DecodeHintType && ZXingBrowser.BarcodeFormat){
+    const hints = new Map();
+    hints.set(ZXingBrowser.DecodeHintType.POSSIBLE_FORMATS, [ZXingBrowser.BarcodeFormat.ITF]);
+    hints.set(ZXingBrowser.DecodeHintType.TRY_HARDER, true);
+    reader = new ZXingBrowser.BrowserMultiFormatReader(hints);
+  }else{
+    reader = new ZXingBrowser.BrowserMultiFormatReader();
+  }
   let lastError = null;
-  for(const canvas of attempts){
-    try{
-      const result = await Promise.resolve(reader.decodeFromCanvas(canvas));
-      const barcode = String(typeof result.getText==='function' ? result.getText() : result.text || '').replace(/\D/g,'');
-      if(barcode.length===44) return barcode;
-    }catch(error){
-      lastError = error;
+  const orientations = [source, rotateBarcodeCanvas(source, true), rotateBarcodeCanvas(source, false)];
+  const regions = [[0,1], [0,0.45], [0.18,0.45], [0.36,0.45], [0.55,0.45]];
+  for(const oriented of orientations){
+    for(const [top,height] of regions){
+      const region = height===1 ? oriented : cropBarcodeCanvas(oriented, top, height);
+      const attempts = [region, enhanceBarcodeCanvas(region), enhanceBarcodeCanvas(region, true)];
+      for(const canvas of attempts){
+        try{
+          const result = await Promise.resolve(reader.decodeFromCanvas(canvas));
+          const barcode = String(typeof result.getText==='function' ? result.getText() : result.text || '').replace(/\D/g,'');
+          if(barcode.length===44) return barcode;
+        }catch(error){
+          lastError = error;
+        }
+      }
+      await new Promise(resolve=>setTimeout(resolve, 0));
     }
   }
   throw lastError || new Error('Código não encontrado.');
@@ -1795,7 +1872,8 @@ barcodeFile.onchange = async event=>{
     applyDecodedBill(decodeLinhaDigitavel(linha));
   }catch(error){
     console.error('Falha ao ler código de barras:', error);
-    toast('Não encontrei o código. Aproxime a câmera, evite reflexos e fotografe somente as barras.');
+    const reason = error && error.message ? ` (${error.message})` : '';
+    toast(`Não encontrei as barras${reason}. Fotografe mais perto, sem cortar as pontas.`);
   }finally{
     barcodeBtn.disabled = false;
     barcodeBtn.textContent = '▥ Ler código de barras';
