@@ -52,3 +52,17 @@ create policy "admins can delete records" on public.records
       where m.user_id = (select auth.uid()) and m.role in ('owner','admin')
     )
   );
+
+-- Envia INSERT, UPDATE e DELETE para os usuários conectados ao painel.
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'records'
+  ) then
+    alter publication supabase_realtime add table public.records;
+  end if;
+end $$;
