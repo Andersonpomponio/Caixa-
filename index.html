@@ -14,6 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.2.1/umd/zxing-browser.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.4/dist/umd/supabase.js"></script>
 <style>
   :root{
@@ -222,7 +223,16 @@
 
   .scan-btn{width:100%;padding:11px;border-radius:10px;border:1px dashed var(--blue);background:var(--gold-dim);color:var(--blue);font-weight:700;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;}
   .scan-btn:disabled{opacity:.6;cursor:default;}
+  .scan-btn.secondary{margin-top:7px;background:var(--surface-2);border-color:var(--line);color:var(--ink-soft);}
   .scan-hint{font-size:10.5px;color:var(--ink-soft);margin-top:5px;text-align:center;}
+  .barcode-overlay{z-index:50;align-items:center;padding:16px;}
+  .barcode-modal{border-radius:20px;max-width:540px;padding:18px;overflow:hidden;}
+  .barcode-camera{position:relative;background:#000;border-radius:14px;overflow:hidden;aspect-ratio:4/3;max-height:68vh;}
+  .barcode-camera video{width:100%;height:100%;display:block;object-fit:contain;}
+  .barcode-guide{position:absolute;left:5%;right:5%;top:50%;height:30%;transform:translateY(-50%);border:2px solid #E7C568;border-radius:12px;box-shadow:0 0 0 999px rgba(0,0,0,.38);pointer-events:none;}
+  .barcode-guide::before,.barcode-guide::after{content:'';position:absolute;left:8%;right:8%;height:1px;background:rgba(231,197,104,.65);}
+  .barcode-guide::before{top:33%;}.barcode-guide::after{bottom:33%;}
+  .barcode-status{text-align:center;color:var(--ink-soft);font-size:12px;line-height:1.45;margin:11px 4px 0;}
 
   .scan-or{display:flex;align-items:center;gap:8px;margin:10px 0;}
   .scan-or::before, .scan-or::after{content:'';flex:1;height:1px;background:var(--line);}
@@ -401,8 +411,9 @@
       <button type="button" id="typeBill" class="boleto">🧾 Boleto</button>
     </div>
     <div class="field" id="fBoletoScanField" style="display:none;margin-top:12px;">
-      <button type="button" class="scan-btn" id="btnScanBoleto">📷 Ler boleto por foto</button>
-      <div class="scan-hint">Aproxime a câmera e deixe a linha digitável inteira e na horizontal</div>
+      <button type="button" class="scan-btn" id="btnScanBarcode">▥ Escanear código de barras</button>
+      <button type="button" class="scan-btn secondary" id="btnScanBoleto">📷 Ler números por foto</button>
+      <div class="scan-hint">No scanner, enquadre todo o código de barras dentro do retângulo</div>
       <input type="file" id="fBoletoFile" accept="image/*" capture="environment" style="display:none;">
       <div class="scan-or"><span>ou</span></div>
       <div class="paste-row">
@@ -434,6 +445,20 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" id="btnCancel">Cancelar</button>
       <button class="btn btn-primary" id="btnSave">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay barcode-overlay" id="overlayBarcode" role="dialog" aria-modal="true" aria-labelledby="barcodeTitle">
+  <div class="modal barcode-modal">
+    <h3 id="barcodeTitle" class="display">Escanear código de barras</h3>
+    <div class="barcode-camera">
+      <video id="barcodeVideo" playsinline muted></video>
+      <div class="barcode-guide" aria-hidden="true"></div>
+    </div>
+    <p class="barcode-status" id="barcodeStatus">Posicione o código inteiro na horizontal e mantenha o celular firme.</p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="btnCancelBarcode">Cancelar</button>
     </div>
   </div>
 </div>
@@ -1583,7 +1608,10 @@ function openModal(){
   updateCatSuggestions();
   overlay.classList.add('show');
 }
-function closeModal(){ overlay.classList.remove('show'); }
+function closeModal(){
+  stopBarcodeScanner();
+  overlay.classList.remove('show');
+}
 
 function setFormType(type){
   formType = type;
@@ -1622,6 +1650,29 @@ function modulo10(digits){
     multiplier = multiplier === 2 ? 1 : 2;
   }
   return (10 - (sum % 10)) % 10;
+}
+
+function barcodeToLinhaDigitavel(barcode){
+  const digits = String(barcode || '').replace(/\D/g, '');
+  if(digits.length!==44 || digits[0]==='8') return null;
+  const withoutGeneralDv = digits.slice(0,4) + digits.slice(5);
+  let sum = 0;
+  let weight = 2;
+  for(let index=withoutGeneralDv.length-1; index>=0; index--){
+    sum += Number(withoutGeneralDv[index]) * weight;
+    weight = weight===9 ? 2 : weight+1;
+  }
+  let expectedDv = 11 - (sum % 11);
+  if(expectedDv===0 || expectedDv>9) expectedDv = 1;
+  if(Number(digits[4])!==expectedDv) return null;
+  const freeField = digits.slice(19);
+  const field1 = digits.slice(0,4) + freeField.slice(0,5);
+  const field2 = freeField.slice(5,15);
+  const field3 = freeField.slice(15,25);
+  return field1 + modulo10(field1)
+    + field2 + modulo10(field2)
+    + field3 + modulo10(field3)
+    + digits[4] + digits.slice(5,19);
 }
 
 function isValidLinhaDigitavel(digits){
@@ -1874,6 +1925,94 @@ document.getElementById('fBoletoFile').onchange = async (e)=>{
     e.target.value = '';
   }
 };
+
+const barcodeOverlay = document.getElementById('overlayBarcode');
+const barcodeStatus = document.getElementById('barcodeStatus');
+const barcodeVideo = document.getElementById('barcodeVideo');
+let barcodeControls = null;
+let barcodeStarting = false;
+
+function stopBarcodeScanner(){
+  if(barcodeControls){
+    try{ barcodeControls.stop(); }catch(e){}
+    barcodeControls = null;
+  }
+  if(barcodeVideo.srcObject){
+    barcodeVideo.srcObject.getTracks().forEach(track=>track.stop());
+    barcodeVideo.srcObject = null;
+  }
+  barcodeStarting = false;
+  barcodeOverlay.classList.remove('show');
+}
+
+async function startBarcodeScanner(){
+  if(barcodeStarting || barcodeControls) return;
+  if(!window.isSecureContext || !navigator.mediaDevices?.getUserMedia){
+    toast('A câmera precisa do link seguro do sistema. Use a leitura por foto.');
+    return;
+  }
+  if(!window.ZXingBrowser){
+    toast('Leitor de código indisponível. Verifique a internet e tente novamente.');
+    return;
+  }
+  barcodeStarting = true;
+  barcodeStatus.textContent = 'Abrindo a câmera traseira...';
+  barcodeOverlay.classList.add('show');
+  try{
+    const reader = new ZXingBrowser.BrowserMultiFormatReader(undefined, {
+      delayBetweenScanAttempts:180,
+      delayBetweenScanSuccess:800,
+    });
+    reader.possibleFormats = [ZXingBrowser.BarcodeFormat.ITF];
+    const controls = await reader.decodeFromConstraints({
+      audio:false,
+      video:{
+        facingMode:{ideal:'environment'},
+        width:{ideal:1920},
+        height:{ideal:1080},
+      }
+    }, barcodeVideo, (result, error, activeControls)=>{
+      if(!result) return;
+      const barcode = String(typeof result.getText==='function' ? result.getText() : result.text || '').replace(/\D/g,'');
+      if(barcode.length!==44){
+        barcodeStatus.textContent = 'Código detectado, mas não possui 44 números. Continue apontando.';
+        return;
+      }
+      if(barcode[0]==='8'){
+        barcodeStatus.textContent = 'Código de convênio detectado. Este tipo deve ser preenchido manualmente.';
+        return;
+      }
+      const linha = barcodeToLinhaDigitavel(barcode);
+      if(!linha){
+        barcodeStatus.textContent = 'Leitura incompleta. Centralize o código, melhore a luz e tente novamente.';
+        return;
+      }
+      activeControls.stop();
+      barcodeControls = null;
+      if(barcodeVideo.srcObject){
+        barcodeVideo.srcObject.getTracks().forEach(track=>track.stop());
+        barcodeVideo.srcObject = null;
+      }
+      barcodeOverlay.classList.remove('show');
+      document.getElementById('fLinhaDigitavel').value = linha;
+      applyDecodedBill(decodeLinhaDigitavel(linha));
+    });
+    barcodeControls = controls;
+    barcodeStarting = false;
+    barcodeStatus.textContent = 'Posicione o código inteiro na horizontal dentro do retângulo.';
+  }catch(err){
+    console.error('Falha ao abrir scanner de código:', err);
+    stopBarcodeScanner();
+    const denied = err && (err.name==='NotAllowedError' || err.name==='PermissionDeniedError');
+    toast(denied
+      ? 'Permita o acesso à câmera para escanear o código.'
+      : 'Não consegui abrir a câmera. Use “Ler números por foto”.');
+  }
+}
+
+document.getElementById('btnScanBarcode').onclick = startBarcodeScanner;
+document.getElementById('btnCancelBarcode').onclick = stopBarcodeScanner;
+barcodeOverlay.onclick = event=>{ if(event.target===barcodeOverlay) stopBarcodeScanner(); };
 
 document.getElementById('typeIn').onclick = ()=>setFormType('entrada');
 document.getElementById('typeOut').onclick = ()=>setFormType('saida');
