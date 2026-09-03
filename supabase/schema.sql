@@ -45,11 +45,11 @@ create policy "authorized team can update records" on public.records
   for update to authenticated
   using (exists (select 1 from public.team_members m where m.user_id = (select auth.uid())))
   with check (exists (select 1 from public.team_members m where m.user_id = (select auth.uid())));
-create policy "admins can delete records" on public.records
+create policy "authorized team can delete records" on public.records
   for delete to authenticated using (
     exists (
       select 1 from public.team_members m
-      where m.user_id = (select auth.uid()) and m.role in ('owner','admin')
+      where m.user_id = (select auth.uid())
     )
   );
 
