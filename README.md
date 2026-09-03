@@ -1,4 +1,16 @@
-# Central de Caixa
+# Ótica Central
+
+Painel integrado para exames, leads da ótica, leads da clínica, comissões de
+lentes, crediários de pastores e crediários gerais.
+
+## Base compartilhada
+
+O arquivo `supabase/schema.sql` contém a estrutura multiusuário com autenticação,
+separação por empresa e segurança por linha (RLS). O navegador deve usar somente
+a chave publicável; nunca use uma chave secreta ou `service_role` no aplicativo.
+
+Para conectar, crie `config.js` a partir de `config.example.js` e informe a URL,
+a chave publicável e o ID da organização.
 
 Aplicação web instalável para controle de entradas, saídas e boletos.
 

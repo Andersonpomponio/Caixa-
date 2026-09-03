@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Central de Caixa</title>
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F4D77E"/>
+      <stop offset="0.55" stop-color="#C9A227"/>
+      <stop offset="1" stop-color="#846317"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="118" fill="#0A0A0B"/>
+  <rect x="26" y="26" width="460" height="460" rx="100" fill="none" stroke="url(#gold)" stroke-width="18"/>
+  <path d="M256 103 390 178v156L256 409 122 334V178l134-75Z" fill="url(#gold)"/>
+  <path d="m256 150 91 51v110l-91 51-91-51V201l91-51Z" fill="#0A0A0B"/>
+  <path d="M220 249h72M220 285h48" stroke="#F4D77E" stroke-width="19" stroke-linecap="round"/>
+</svg>
