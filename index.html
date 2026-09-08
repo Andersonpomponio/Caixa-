@@ -544,6 +544,11 @@ const supabaseClient = window.supabase
 let syncUser = null;
 let syncChannel = null;
 let syncTimer = null;
+let syncRefreshPromise = null;
+let syncRefreshAgain = false;
+let syncRetryTimer = null;
+let syncResumeTimer = null;
+let realtimeStatus = 'CLOSED';
 let localChangeVersion = 0;
 let deletedTransactionIds = new Set();
 let deletedBillIds = new Set();
@@ -648,8 +653,10 @@ function mergeBillVersions(remoteItems, localItems){
 function mergedCloudPayload(cloudData){
   return {
     stores: mergeById(cloudData && cloudData.stores, stores),
-    transactions: activeTransactions(mergeById(cloudData && cloudData.transactions, transactions)),
-    bills: mergeBillVersions(cloudData && cloudData.bills, bills),
+    // As tabelas individuais são a fonte oficial. As listas antigas são
+    // preservadas somente para compatibilidade e nunca mais sobrescrevem o app.
+    transactions: Array.isArray(cloudData && cloudData.transactions) ? cloudData.transactions : [],
+    bills: Array.isArray(cloudData && cloudData.bills) ? cloudData.bills : [],
   };
 }
 
@@ -664,12 +671,9 @@ function updateSyncUi(message){
 }
 
 function applyCloudState(data){
-  if(!data || !Array.isArray(data.stores) || !Array.isArray(data.bills)) return false;
+  if(!data || !Array.isArray(data.stores)) return false;
   stores = data.stores;
-  // O bloco antigo continua compatível, mas nunca pode apagar um boleto local mais novo.
-  bills = mergeBillVersions(data.bills, bills);
   lsSet('stores', stores);
-  lsSet('bills', bills);
   render();
   return true;
 }
@@ -736,11 +740,14 @@ async function upsertCloudTransactions(items){
   const pending = activeTransactions(items);
   if(!pending.length) return true;
   if(!supabaseClient || !syncUser) return false;
-  const {error} = await supabaseClient
+  const {data, error} = await supabaseClient
     .from('shared_cash_transactions')
-    .upsert(pending.map(transactionToCloudRow), {onConflict:'id'});
-  if(error){
+    .upsert(pending.map(transactionToCloudRow), {onConflict:'id'})
+    .select('id');
+  if(error || !Array.isArray(data) || data.length!==pending.length){
+    console.error('[sync] Falha ao enviar lançamentos', error || 'confirmação incompleta');
     updateSyncUi('Lançamento salvo neste aparelho; sincronização pendente.');
+    scheduleSyncRetry();
     return false;
   }
   updateSyncUi('Lançamentos sincronizados.');
@@ -768,19 +775,21 @@ async function loadCloudTransactions(){
   lsSet('deletedTransactionIds', [...deletedTransactionIds]);
   lsSet('transactions', transactions);
   render();
-  if(pendingLocal.length) await upsertCloudTransactions(pendingLocal);
-  return true;
+  return pendingLocal.length ? await upsertCloudTransactions(pendingLocal) : true;
 }
 
 async function upsertCloudBills(items){
   const pending = activeBills(items);
   if(!pending.length) return true;
   if(!supabaseClient || !syncUser) return false;
-  const {error} = await supabaseClient
+  const {data, error} = await supabaseClient
     .from('shared_cash_bills')
-    .upsert(pending.map(billToCloudRow), {onConflict:'id'});
-  if(error){
+    .upsert(pending.map(billToCloudRow), {onConflict:'id'})
+    .select('id');
+  if(error || !Array.isArray(data) || data.length!==pending.length){
+    console.error('[sync] Falha ao enviar boletos', error || 'confirmação incompleta');
     updateSyncUi('Boleto salvo neste aparelho; sincronização pendente.');
+    scheduleSyncRetry();
     return false;
   }
   updateSyncUi('Boletos sincronizados.');
@@ -810,8 +819,7 @@ async function loadCloudBills(){
   lsSet('deletedBillIds', [...deletedBillIds]);
   lsSet('bills', bills);
   render();
-  if(pendingLocal.length) await upsertCloudBills(pendingLocal);
-  return true;
+  return pendingLocal.length ? await upsertCloudBills(pendingLocal) : true;
 }
 
 async function markCloudBillDeleted(id){
@@ -1002,40 +1010,72 @@ async function loadCloudState(){
   return data ? data.data : null;
 }
 
-async function startSync(user){
-  if(!supabaseClient || !user) return;
-  if(syncUser && syncUser.id === user.id) return;
-  const person = Object.values(LOGIN_USERS).find(item=>item.email===user.email);
-  if(!person){
-    await supabaseClient.auth.signOut();
-    showLoginGate('Use somente Anderson ou Luciane para acessar esta caixa.');
-    return;
+function scheduleSyncRetry(delay=5000){
+  if(!syncUser || navigator.onLine===false) return;
+  clearTimeout(syncRetryTimer);
+  syncRetryTimer = setTimeout(()=>refreshCloudData(), delay);
+}
+
+async function refreshCloudData({announce=false}={}){
+  if(!supabaseClient || !syncUser || navigator.onLine===false) return false;
+  if(syncRefreshPromise){
+    syncRefreshAgain = true;
+    return syncRefreshPromise;
   }
+  if(announce) updateSyncUi('Buscando os dados mais recentes…');
+  syncRefreshPromise = (async()=>{
+    try{
+      console.info('[sync] Iniciando conferência completa');
+      const cloudStatePromise = loadCloudState().then(state=>{
+        if(state) applyCloudState(state);
+        return true;
+      }).catch(error=>{
+        console.error('[sync] Falha ao carregar configurações', error);
+        return false;
+      });
+      const [transactionsOk, billsOk, stateOk] = await Promise.all([
+        loadTransactionDeletions().then(ok=>ok ? loadCloudTransactions() : false),
+        loadBillDeletions().then(ok=>ok ? loadCloudBills() : false),
+        cloudStatePromise,
+      ]);
+      const success = Boolean(transactionsOk && billsOk && stateOk);
+      if(success){
+        clearTimeout(syncRetryTimer);
+        const time = new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+        updateSyncUi(`Sincronizado às ${time}.`);
+        console.info('[sync] Conferência concluída', {transactions:transactions.length,bills:bills.length});
+      }else{
+        updateSyncUi('Alguns dados aguardam sincronização. Tentarei novamente.');
+        scheduleSyncRetry(5000);
+      }
+      return success;
+    }catch(error){
+      console.error('[sync] Conferência interrompida', error);
+      updateSyncUi('Sincronização interrompida. Tentarei novamente.');
+      scheduleSyncRetry(5000);
+      return false;
+    }
+  })();
+  try{
+    return await syncRefreshPromise;
+  }finally{
+    syncRefreshPromise = null;
+    if(syncRefreshAgain){
+      syncRefreshAgain = false;
+      scheduleSyncRetry(200);
+    }
+  }
+}
+
+async function startRealtimeChannel(){
+  if(!supabaseClient || !syncUser || document.hidden) return;
   if(syncChannel) await syncChannel.unsubscribe();
-  syncUser = user;
-  updateSyncUi('Conectando a sincronização…');
-  // Um lançamento feito enquanto a nuvem está carregando é sempre mais novo
-  // que a cópia recebida. Não deixe essa cópia antiga apagá-lo.
-  const versionBeforeLoad = localChangeVersion;
-  await loadTransactionDeletions();
-  await loadBillDeletions();
-  const cloudState = await loadCloudState();
-  let ready = true;
-  if(localChangeVersion !== versionBeforeLoad){
-    ready = await pushCloudState();
-  }else if(cloudState && applyCloudState(cloudState)){
-    // Uma atualização normal apenas lê a nuvem; só mudanças locais pendentes escrevem.
-    updateSyncUi();
-  }else{
-    ready = await pushCloudState();
-  }
-  await loadCloudTransactions();
-  await loadCloudBills();
+  realtimeStatus = 'CONNECTING';
   syncChannel = supabaseClient.channel('shared-cash-central')
     .on('postgres_changes', {
       event:'*', schema:'public', table:'shared_cash_state', filter:'id=eq.central',
     }, payload=>{
-      if(payload.new && applyCloudState(payload.new.data)) updateSyncUi();
+      if(payload.new) applyCloudState(payload.new.data);
     })
     .on('postgres_changes', {
       event:'INSERT', schema:'public', table:'shared_cash_transaction_deletions',
@@ -1068,8 +1108,42 @@ async function startSync(user){
       event:'*', schema:'public', table:'shared_cash_transactions',
     }, applyCloudTransactionChange)
     .subscribe(status=>{
-      if(status === 'SUBSCRIBED') updateSyncUi();
+      realtimeStatus = status;
+      console.info('[sync] Realtime', status);
+      if(status==='SUBSCRIBED'){
+        // Realtime é um aviso; esta leitura recupera qualquer evento perdido
+        // enquanto o celular estava bloqueado ou em segundo plano.
+        refreshCloudData();
+      }else if(['CHANNEL_ERROR','TIMED_OUT','CLOSED'].includes(status)){
+        updateSyncUi('Conexão interrompida. Reconectando…');
+        scheduleSyncRetry(3000);
+      }
     });
+}
+
+function resumeSync(){
+  if(!syncUser || document.hidden) return;
+  clearTimeout(syncResumeTimer);
+  syncResumeTimer = setTimeout(async()=>{
+    if(realtimeStatus!=='SUBSCRIBED') await startRealtimeChannel();
+    await refreshCloudData();
+  },250);
+}
+
+async function startSync(user){
+  if(!supabaseClient || !user) return;
+  if(syncUser && syncUser.id === user.id) return;
+  const person = Object.values(LOGIN_USERS).find(item=>item.email===user.email);
+  if(!person){
+    await supabaseClient.auth.signOut();
+    showLoginGate('Use somente Anderson ou Luciane para acessar esta caixa.');
+    return;
+  }
+  if(syncChannel) await syncChannel.unsubscribe();
+  syncUser = user;
+  updateSyncUi('Conectando a sincronização…');
+  const ready = await refreshCloudData({announce:true});
+  await startRealtimeChannel();
   if(ready) hideLoginGate();
   else showLoginGate('Não foi possível conectar esta caixa. Confira a internet e tente entrar novamente.');
 }
@@ -1091,6 +1165,9 @@ async function initSync(){
       if(syncChannel) syncChannel.unsubscribe();
       syncChannel = null;
       syncUser = null;
+      realtimeStatus = 'CLOSED';
+      clearTimeout(syncRetryTimer);
+      clearTimeout(syncResumeTimer);
       updateSyncUi();
       showLoginGate();
     }
@@ -1120,16 +1197,22 @@ document.getElementById('btnRefresh').onclick = async ()=>{
   const button = document.getElementById('btnRefresh');
   button.disabled = true;
   button.textContent = '↻';
-  toast('Atualizando painel…');
+  toast('Sincronizando painel…');
+  let synced = false;
   try{
     if('serviceWorker' in navigator){
       const registration = await navigator.serviceWorker.getRegistration();
       if(registration) await registration.update();
     }
-  }catch(e){}
-  const url = new URL(window.location.href);
-  url.searchParams.set('atualizado', Date.now().toString());
-  window.location.replace(url.toString());
+    if(realtimeStatus!=='SUBSCRIBED') await startRealtimeChannel();
+    synced = await refreshCloudData({announce:true});
+  }catch(error){
+    console.error('[sync] Atualização manual falhou', error);
+  }finally{
+    button.disabled = false;
+    button.textContent = '↻';
+    toast(synced ? 'Painel sincronizado' : 'Sincronização pendente. Tentarei novamente.');
+  }
 };
 
 // Impede o gesto de puxar para baixo no topo, que recarrega o Safari/iPhone.
@@ -1206,7 +1289,6 @@ function saveTransactions(){
 function saveBills(){
   const saved = lsSet('bills', bills);
   if(saved) localChangeVersion++;
-  scheduleCloudSync();
   return saved;
 }
 
@@ -2059,7 +2141,11 @@ barcodeFile.onchange = async event=>{
 window.addEventListener('pagehide', stopBarcodeCamera);
 document.addEventListener('visibilitychange', ()=>{
   if(document.hidden) stopBarcodeCamera();
+  else resumeSync();
 });
+window.addEventListener('online', resumeSync);
+window.addEventListener('pageshow', resumeSync);
+window.addEventListener('focus', resumeSync);
 document.getElementById('typeIn').onclick = ()=>setFormType('entrada');
 document.getElementById('typeOut').onclick = ()=>setFormType('saida');
 document.getElementById('typeBill').onclick = ()=>setFormType('boleto');
