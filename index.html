@@ -198,6 +198,18 @@
   .bill-view-tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:-3px 0 13px;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);}
   .bill-view-tab{border:0;border-radius:9px;padding:9px 8px;background:transparent;color:var(--ink-soft);font:inherit;font-size:11.5px;font-weight:700;cursor:pointer;}
   .bill-view-tab.on{background:var(--blue);color:#0A0A0B;box-shadow:0 5px 14px rgba(201,162,90,.2);}
+  .bill-tools{display:grid;grid-template-columns:minmax(0,1fr) 148px;gap:8px;margin:0 0 10px;}
+  .bill-search,.bill-status-filter{width:100%;min-height:42px;border:1px solid var(--line);border-radius:11px;background:var(--surface-2);color:var(--ink);font:inherit;font-size:13px;}
+  .bill-search{padding:9px 12px;}
+  .bill-status-filter{padding:9px 30px 9px 10px;}
+  .bill-search:focus,.bill-status-filter:focus{outline:2px solid var(--blue);outline-offset:1px;}
+  .bill-results-info{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:2px 1px 8px;color:var(--ink-soft);font-size:11.5px;}
+  .bill-results-info strong{color:var(--ink);font-weight:700;}
+  .bill-pagination{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:12px;}
+  .bill-page-btn{min-width:92px;min-height:38px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);color:var(--ink);font:inherit;font-size:12px;font-weight:700;cursor:pointer;}
+  .bill-page-btn:disabled{opacity:.38;cursor:default;}
+  .bill-page-label{min-width:82px;text-align:center;color:var(--ink-soft);font-size:12px;font-weight:600;}
+  @media(max-width:430px){.bill-tools{grid-template-columns:1fr;}.bill-status-filter{font-size:14px;}.bill-search{font-size:16px;}}
 
   .bill-list{display:flex;flex-direction:column;gap:8px;margin-top:4px;}
   .bill{display:flex;align-items:center;gap:10px;padding:10px;border-radius:10px;background:var(--surface-2);border-left:3px solid var(--line);}
@@ -378,7 +390,13 @@
       <button type="button" class="bill-view-tab" id="billViewPaid" role="tab">Pagos</button>
     </div>
     <div class="alert-grid" id="billAlerts"></div>
+    <div class="bill-tools">
+      <input type="search" class="bill-search" id="billSearch" placeholder="Buscar boleto, loja ou valor" aria-label="Buscar boletos">
+      <select class="bill-status-filter" id="billStatusFilter" aria-label="Filtrar situação dos boletos"></select>
+    </div>
+    <div class="bill-results-info" id="billResultsInfo"></div>
     <div class="bill-list" id="billList"></div>
+    <div class="bill-pagination" id="billPagination"></div>
   </div>
 
   <div class="panel">
@@ -512,6 +530,10 @@ let activeTab = 'all';
 let formType = 'entrada';
 let periodMode = 'month';
 let billView = 'pending';
+let billSearch = '';
+let billStatusFilter = 'all';
+let billPage = 1;
+const BILLS_PER_PAGE = 10;
 let periodDate = new Date(formatLocalDate(new Date()) + 'T00:00:00');
 
 const SUPABASE_URL = 'https://nynpmqlnxvmihusmfffo.supabase.co';
@@ -1293,14 +1315,14 @@ function renderTabs(){
   const allTab = document.createElement('button');
   allTab.className = 'tab' + (activeTab==='all' ? ' active' : '');
   allTab.innerHTML = 'Consolidado' + (allUrgent>0 ? `<span class="tab-badge">${allUrgent}</span>` : '');
-  allTab.onclick = ()=>{activeTab='all'; render();};
+  allTab.onclick = ()=>{activeTab='all'; billPage=1; render();};
   tabs.appendChild(allTab);
   stores.forEach(st=>{
     const urgent = pendingBillsFor(st.id).filter(b=>billDaysDiff(b.dueDate)<=0).length;
     const b = document.createElement('button');
     b.className = 'tab' + (activeTab===st.id ? ' active' : '');
     b.innerHTML = st.name + (urgent>0 ? `<span class="tab-badge">${urgent}</span>` : '');
-    b.onclick = ()=>{activeTab=st.id; render();};
+    b.onclick = ()=>{activeTab=st.id; billPage=1; render();};
     tabs.appendChild(b);
   });
 }
@@ -1486,6 +1508,13 @@ function renderBillPanel(){
   paidButton.setAttribute('aria-selected', billView==='paid');
   pendingButton.textContent = `A vencer / vencidos (${pendingList.length})`;
   paidButton.textContent = `Pagos (${paidList.length})`;
+  const statusSelect = document.getElementById('billStatusFilter');
+  const statusOptions = billView==='paid'
+    ? [['all','Todos os pagos'],['on-time','Pagos em dia'],['late-paid','Pagos em atraso']]
+    : [['all','Todos em aberto'],['overdue','Vencidos'],['today','Vence hoje'],['upcoming','A vencer']];
+  if(!statusOptions.some(([value])=>value===billStatusFilter)) billStatusFilter = 'all';
+  statusSelect.innerHTML = statusOptions.map(([value,label])=>`<option value="${value}">${label}</option>`).join('');
+  statusSelect.value = billStatusFilter;
 
   const vencidos = pendingList.filter(b=>billDaysDiff(b.dueDate)<0);
   const hoje = pendingList.filter(b=>billDaysDiff(b.dueDate)===0);
@@ -1516,15 +1545,48 @@ function renderBillPanel(){
     </div>
   `).join('');
 
-  const sorted = list.slice().sort((a,b)=> billView==='paid'
+  const normalizedSearch = billSearch.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+  const filtered = list.filter(b=>{
+    const diff = billDaysDiff(b.dueDate);
+    const matchesStatus = billStatusFilter==='all'
+      || (billStatusFilter==='overdue' && diff<0)
+      || (billStatusFilter==='today' && diff===0)
+      || (billStatusFilter==='upcoming' && diff>0)
+      || (billStatusFilter==='on-time' && (b.paidDate || b.dueDate)<=b.dueDate)
+      || (billStatusFilter==='late-paid' && (b.paidDate || b.dueDate)>b.dueDate);
+    if(!matchesStatus) return false;
+    if(!normalizedSearch) return true;
+    const store = stores.find(s=>s.id===b.storeId);
+    const searchable = [
+      b.description, store?.name, b.dueDate, b.paidDate,
+      String(b.value), Number(b.value).toLocaleString('pt-BR',{minimumFractionDigits:2})
+    ].filter(Boolean).join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+    return searchable.includes(normalizedSearch);
+  });
+  const sorted = filtered.slice().sort((a,b)=> billView==='paid'
     ? (b.paidDate || b.dueDate).localeCompare(a.paidDate || a.dueDate)
     : a.dueDate.localeCompare(b.dueDate));
   const billListEl = document.getElementById('billList');
+  const totalPages = Math.max(1, Math.ceil(sorted.length/BILLS_PER_PAGE));
+  billPage = Math.min(Math.max(1,billPage),totalPages);
+  const startIndex = (billPage-1)*BILLS_PER_PAGE;
+  const visibleBills = sorted.slice(startIndex,startIndex+BILLS_PER_PAGE);
+  const resultsInfo = document.getElementById('billResultsInfo');
+  resultsInfo.innerHTML = sorted.length
+    ? `<span>Mostrando <strong>${startIndex+1}–${Math.min(startIndex+BILLS_PER_PAGE,sorted.length)}</strong> de <strong>${sorted.length}</strong></span><span>10 por página</span>`
+    : '<span><strong>0</strong> boletos encontrados</span>';
+  const pagination = document.getElementById('billPagination');
+  pagination.innerHTML = sorted.length>BILLS_PER_PAGE ? `
+    <button type="button" class="bill-page-btn" id="billPagePrev" ${billPage===1?'disabled':''}>‹ Anterior</button>
+    <span class="bill-page-label">${billPage} de ${totalPages}</span>
+    <button type="button" class="bill-page-btn" id="billPageNext" ${billPage===totalPages?'disabled':''}>Próxima ›</button>
+  ` : '';
   if(sorted.length===0){
-    billListEl.innerHTML = `<div class="empty">${billView==='paid' ? 'Nenhum boleto pago neste período.' : 'Nenhum boleto em aberto neste período.'}</div>`;
+    const hasFilter = Boolean(normalizedSearch) || billStatusFilter!=='all';
+    billListEl.innerHTML = `<div class="empty">${hasFilter ? 'Nenhum boleto corresponde à busca ou ao filtro.' : billView==='paid' ? 'Nenhum boleto pago neste período.' : 'Nenhum boleto em aberto neste período.'}</div>`;
     return;
   }
-  billListEl.innerHTML = sorted.map(b=>{
+  billListEl.innerHTML = visibleBills.map(b=>{
     const st = stores.find(s=>s.id===b.storeId);
     const diff = billDaysDiff(b.dueDate);
     const isLate = billView==='pending' && diff<0;
@@ -1589,6 +1651,16 @@ function renderBillPanel(){
         toast(synced ? 'Boleto excluído' : 'Excluído neste aparelho; sincronização pendente');
       }
     };
+  });
+  document.getElementById('billPagePrev')?.addEventListener('click',()=>{
+    billPage--;
+    renderBillPanel();
+    document.getElementById('billTitle').scrollIntoView({behavior:'smooth',block:'start'});
+  });
+  document.getElementById('billPageNext')?.addEventListener('click',()=>{
+    billPage++;
+    renderBillPanel();
+    document.getElementById('billTitle').scrollIntoView({behavior:'smooth',block:'start'});
   });
 }
 
@@ -1991,16 +2063,28 @@ document.addEventListener('visibilitychange', ()=>{
 document.getElementById('typeIn').onclick = ()=>setFormType('entrada');
 document.getElementById('typeOut').onclick = ()=>setFormType('saida');
 document.getElementById('typeBill').onclick = ()=>setFormType('boleto');
-document.getElementById('periodMonth').onclick = ()=>{ periodMode='month'; render(); };
-document.getElementById('periodWeek').onclick = ()=>{ periodMode='week'; render(); };
-document.getElementById('billViewPending').onclick = ()=>{ billView='pending'; renderBillPanel(); };
-document.getElementById('billViewPaid').onclick = ()=>{ billView='paid'; renderBillPanel(); };
+document.getElementById('periodMonth').onclick = ()=>{ periodMode='month'; billPage=1; render(); };
+document.getElementById('periodWeek').onclick = ()=>{ periodMode='week'; billPage=1; render(); };
+document.getElementById('billViewPending').onclick = ()=>{ billView='pending'; billStatusFilter='all'; billPage=1; renderBillPanel(); };
+document.getElementById('billViewPaid').onclick = ()=>{ billView='paid'; billStatusFilter='all'; billPage=1; renderBillPanel(); };
+document.getElementById('billSearch').addEventListener('input',event=>{
+  billSearch = event.target.value;
+  billPage = 1;
+  renderBillPanel();
+});
+document.getElementById('billStatusFilter').addEventListener('change',event=>{
+  billStatusFilter = event.target.value;
+  billPage = 1;
+  renderBillPanel();
+});
 document.getElementById('periodPrev').onclick = ()=>{
+  billPage = 1;
   if(periodMode==='month') periodDate.setMonth(periodDate.getMonth()-1);
   else periodDate.setDate(periodDate.getDate()-7);
   render();
 };
 document.getElementById('periodNext').onclick = ()=>{
+  billPage = 1;
   if(periodMode==='month') periodDate.setMonth(periodDate.getMonth()+1);
   else periodDate.setDate(periodDate.getDate()+7);
   render();
