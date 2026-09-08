@@ -195,7 +195,7 @@
   .alert-card.hoje{background:var(--gold-dim);color:var(--gold);border-color:transparent;}
   .alert-card.semana{background:var(--blue-dim);color:var(--blue);border-color:transparent;}
   .alert-card.mes{background:var(--teal-dim);color:var(--teal);border-color:transparent;}
-  .bill-view-tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:-3px 0 13px;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);}
+  .bill-view-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:-3px 0 13px;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);}
   .bill-view-tab{border:0;border-radius:9px;padding:9px 8px;background:transparent;color:var(--ink-soft);font:inherit;font-size:11.5px;font-weight:700;cursor:pointer;}
   .bill-view-tab.on{background:var(--blue);color:#0A0A0B;box-shadow:0 5px 14px rgba(201,162,90,.2);}
   .bill-tools{display:grid;grid-template-columns:minmax(0,1fr) 148px;gap:8px;margin:0 0 10px;}
@@ -386,7 +386,8 @@
   <div class="panel">
     <h2 id="billTitle">Boletos</h2>
     <div class="bill-view-tabs" role="tablist" aria-label="Situação dos boletos">
-      <button type="button" class="bill-view-tab on" id="billViewPending" role="tab">A vencer / vencidos</button>
+      <button type="button" class="bill-view-tab on" id="billViewUpcoming" role="tab">A vencer</button>
+      <button type="button" class="bill-view-tab" id="billViewOverdue" role="tab">Vencidos</button>
       <button type="button" class="bill-view-tab" id="billViewPaid" role="tab">Pagos</button>
     </div>
     <div class="alert-grid" id="billAlerts"></div>
@@ -529,7 +530,7 @@ let bills = [];
 let activeTab = 'all';
 let formType = 'entrada';
 let periodMode = 'month';
-let billView = 'pending';
+let billView = 'upcoming';
 let billSearch = '';
 let billStatusFilter = 'all';
 let billPage = 1;
@@ -1381,6 +1382,15 @@ function periodBillsFor(storeId){
   return pendingBillsFor(storeId).filter(b => billDaysDiff(b.dueDate)<0 || isInSelectedPeriod(b.dueDate));
 }
 
+function periodUpcomingBillsFor(storeId){
+  return pendingBillsFor(storeId).filter(b => billDaysDiff(b.dueDate)>=0 && isInSelectedPeriod(b.dueDate));
+}
+
+function overdueBillsFor(storeId){
+  // Vencidos permanecem visíveis até serem pagos, mesmo ao trocar o período.
+  return pendingBillsFor(storeId).filter(b => billDaysDiff(b.dueDate)<0);
+}
+
 function paidBillsFor(storeId){
   const list = bills.filter(b=>b.paid);
   return storeId==='all' ? list : list.filter(b=>b.storeId===storeId);
@@ -1579,28 +1589,44 @@ function renderTxList(){
 }
 
 function renderBillPanel(){
-  const pendingList = periodBillsFor(activeTab);
+  const upcomingList = periodUpcomingBillsFor(activeTab);
+  const overdueList = overdueBillsFor(activeTab);
   const paidList = periodPaidBillsFor(activeTab);
-  const list = billView==='paid' ? paidList : pendingList;
-  const pendingButton = document.getElementById('billViewPending');
+  const list = billView==='paid' ? paidList : billView==='overdue' ? overdueList : upcomingList;
+  const upcomingButton = document.getElementById('billViewUpcoming');
+  const overdueButton = document.getElementById('billViewOverdue');
   const paidButton = document.getElementById('billViewPaid');
-  pendingButton.classList.toggle('on', billView==='pending');
+  upcomingButton.classList.toggle('on', billView==='upcoming');
+  overdueButton.classList.toggle('on', billView==='overdue');
   paidButton.classList.toggle('on', billView==='paid');
-  pendingButton.setAttribute('aria-selected', billView==='pending');
+  upcomingButton.setAttribute('aria-selected', billView==='upcoming');
+  overdueButton.setAttribute('aria-selected', billView==='overdue');
   paidButton.setAttribute('aria-selected', billView==='paid');
-  pendingButton.textContent = `A vencer / vencidos (${pendingList.length})`;
+  upcomingButton.textContent = `A vencer (${upcomingList.length})`;
+  overdueButton.textContent = `Vencidos (${overdueList.length})`;
   paidButton.textContent = `Pagos (${paidList.length})`;
+  const searchInput = document.getElementById('billSearch');
+  searchInput.placeholder = billView==='paid'
+    ? 'Buscar boleto pago, loja ou valor'
+    : billView==='overdue'
+      ? 'Buscar boleto vencido, loja ou valor'
+      : 'Buscar boleto a vencer, loja ou valor';
   const statusSelect = document.getElementById('billStatusFilter');
   const statusOptions = billView==='paid'
     ? [['all','Todos os pagos'],['on-time','Pagos em dia'],['late-paid','Pagos em atraso']]
-    : [['all','Todos em aberto'],['overdue','Vencidos'],['today','Vence hoje'],['upcoming','A vencer']];
+    : billView==='overdue'
+      ? [['all','Todos os vencidos'],['overdue-seven','Até 7 dias'],['overdue-thirty','8 a 30 dias'],['overdue-old','Mais de 30 dias']]
+      : [['all','Todos a vencer'],['today','Vence hoje'],['next-seven','Próximos 7 dias'],['later','Depois de 7 dias']];
   if(!statusOptions.some(([value])=>value===billStatusFilter)) billStatusFilter = 'all';
   statusSelect.innerHTML = statusOptions.map(([value,label])=>`<option value="${value}">${label}</option>`).join('');
   statusSelect.value = billStatusFilter;
 
-  const vencidos = pendingList.filter(b=>billDaysDiff(b.dueDate)<0);
-  const hoje = pendingList.filter(b=>billDaysDiff(b.dueDate)===0);
-  const aVencer = pendingList.filter(b=>billDaysDiff(b.dueDate)>0);
+  const hoje = upcomingList.filter(b=>billDaysDiff(b.dueDate)===0);
+  const proximosSete = upcomingList.filter(b=>billDaysDiff(b.dueDate)>0 && billDaysDiff(b.dueDate)<=7);
+  const depoisSete = upcomingList.filter(b=>billDaysDiff(b.dueDate)>7);
+  const vencidosSete = overdueList.filter(b=>Math.abs(billDaysDiff(b.dueDate))<=7);
+  const vencidosTrinta = overdueList.filter(b=>Math.abs(billDaysDiff(b.dueDate))>=8 && Math.abs(billDaysDiff(b.dueDate))<=30);
+  const vencidosAntigos = overdueList.filter(b=>Math.abs(billDaysDiff(b.dueDate))>30);
   const pagosEmDia = paidList.filter(b=>(b.paidDate || b.dueDate)<=b.dueDate);
   const pagosAtrasados = paidList.filter(b=>(b.paidDate || b.dueDate)>b.dueDate);
   const sum = arr => arr.reduce((a,b)=>a+b.value,0);
@@ -1610,12 +1636,19 @@ function renderBillPanel(){
       {cls:'semana', label:'Pagos em dia', arr:pagosEmDia},
       {cls:'vencido', label:'Pagos em atraso', arr:pagosAtrasados},
     ]
-    : [
-      {cls:'mes', label:'Total em aberto', arr:pendingList},
-      {cls:'vencido', label:'Vencidos', arr:vencidos},
-      {cls:'hoje', label:'Vence hoje', arr:hoje},
-      {cls:'semana', label:'A vencer', arr:aVencer},
-    ];
+    : billView==='overdue'
+      ? [
+        {cls:'vencido', label:'Total vencido', arr:overdueList},
+        {cls:'hoje', label:'Até 7 dias', arr:vencidosSete},
+        {cls:'semana', label:'8 a 30 dias', arr:vencidosTrinta},
+        {cls:'mes', label:'Mais de 30 dias', arr:vencidosAntigos},
+      ]
+      : [
+        {cls:'mes', label:'Total a vencer', arr:upcomingList},
+        {cls:'hoje', label:'Vence hoje', arr:hoje},
+        {cls:'semana', label:'Próximos 7 dias', arr:proximosSete},
+        {cls:'vencido', label:'Depois de 7 dias', arr:depoisSete},
+      ];
   document.getElementById('billTitle').textContent = 'Boletos — ' + periodLabel();
   const alerts = document.getElementById('billAlerts');
   alerts.classList.toggle('paid', billView==='paid');
@@ -1631,9 +1664,12 @@ function renderBillPanel(){
   const filtered = list.filter(b=>{
     const diff = billDaysDiff(b.dueDate);
     const matchesStatus = billStatusFilter==='all'
-      || (billStatusFilter==='overdue' && diff<0)
       || (billStatusFilter==='today' && diff===0)
-      || (billStatusFilter==='upcoming' && diff>0)
+      || (billStatusFilter==='next-seven' && diff>0 && diff<=7)
+      || (billStatusFilter==='later' && diff>7)
+      || (billStatusFilter==='overdue-seven' && diff<0 && Math.abs(diff)<=7)
+      || (billStatusFilter==='overdue-thirty' && Math.abs(diff)>=8 && Math.abs(diff)<=30)
+      || (billStatusFilter==='overdue-old' && Math.abs(diff)>30)
       || (billStatusFilter==='on-time' && (b.paidDate || b.dueDate)<=b.dueDate)
       || (billStatusFilter==='late-paid' && (b.paidDate || b.dueDate)>b.dueDate);
     if(!matchesStatus) return false;
@@ -1665,14 +1701,19 @@ function renderBillPanel(){
   ` : '';
   if(sorted.length===0){
     const hasFilter = Boolean(normalizedSearch) || billStatusFilter!=='all';
-    billListEl.innerHTML = `<div class="empty">${hasFilter ? 'Nenhum boleto corresponde à busca ou ao filtro.' : billView==='paid' ? 'Nenhum boleto pago neste período.' : 'Nenhum boleto em aberto neste período.'}</div>`;
+    const emptyText = billView==='paid'
+      ? 'Nenhum boleto pago neste período.'
+      : billView==='overdue'
+        ? 'Nenhum boleto vencido.'
+        : 'Nenhum boleto a vencer neste período.';
+    billListEl.innerHTML = `<div class="empty">${hasFilter ? 'Nenhum boleto corresponde à busca ou ao filtro.' : emptyText}</div>`;
     return;
   }
   billListEl.innerHTML = visibleBills.map(b=>{
     const st = stores.find(s=>s.id===b.storeId);
     const diff = billDaysDiff(b.dueDate);
-    const isLate = billView==='pending' && diff<0;
-    const isToday = billView==='pending' && diff===0;
+    const isLate = billView==='overdue';
+    const isToday = billView==='upcoming' && diff===0;
     const d = new Date(b.dueDate+'T00:00:00');
     const dateStr = d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
     let statusTxt;
@@ -1689,7 +1730,7 @@ function renderBillPanel(){
       </div>
       <div class="bill-val">${fmt(b.value)}</div>
       <div class="bill-actions">
-        ${billView==='pending' ? `<button class="bill-btn pay" data-id="${b.id}" data-action="pay" aria-label="Marcar como pago">✓</button>` : ''}
+        ${billView!=='paid' ? `<button class="bill-btn pay" data-id="${b.id}" data-action="pay" aria-label="Marcar como pago">✓</button>` : ''}
         <button class="bill-btn" data-id="${b.id}" data-action="del" aria-label="Excluir boleto">✕</button>
       </div>
     </div>`;
@@ -2151,8 +2192,17 @@ document.getElementById('typeOut').onclick = ()=>setFormType('saida');
 document.getElementById('typeBill').onclick = ()=>setFormType('boleto');
 document.getElementById('periodMonth').onclick = ()=>{ periodMode='month'; billPage=1; render(); };
 document.getElementById('periodWeek').onclick = ()=>{ periodMode='week'; billPage=1; render(); };
-document.getElementById('billViewPending').onclick = ()=>{ billView='pending'; billStatusFilter='all'; billPage=1; renderBillPanel(); };
-document.getElementById('billViewPaid').onclick = ()=>{ billView='paid'; billStatusFilter='all'; billPage=1; renderBillPanel(); };
+function switchBillView(view){
+  billView = view;
+  billSearch = '';
+  billStatusFilter = 'all';
+  billPage = 1;
+  document.getElementById('billSearch').value = '';
+  renderBillPanel();
+}
+document.getElementById('billViewUpcoming').onclick = ()=>switchBillView('upcoming');
+document.getElementById('billViewOverdue').onclick = ()=>switchBillView('overdue');
+document.getElementById('billViewPaid').onclick = ()=>switchBillView('paid');
 document.getElementById('billSearch').addEventListener('input',event=>{
   billSearch = event.target.value;
   billPage = 1;
