@@ -55,6 +55,7 @@ function persistRecords(){
 }
 
 function removeLocalRecord(id){
+  if(!id)return;
   recordModules.forEach(module=>{
     data[module]=(data[module]||[]).filter(item=>item._id!==id);
   });
@@ -66,13 +67,13 @@ function upsertLocalRecord(row){
   recordModules.forEach(module=>{
     data[module]=(data[module]||[]).filter(item=>item._id!==row.id);
   });
-  data[row.module].unshift({...row.payload,_id:row.id});
+  data[row.module].unshift({...row.payload,_id:row.id,_createdAt:row.created_at||null,_updatedAt:row.updated_at||null});
   persistRecords();
 }
 
 loadCloud=async function(){
   const requestId=++cloudReadSerial;
-  const {data:rows,error}=await db.from('records').select('id,module,payload').order('created_at',{ascending:false});
+  const {data:rows,error}=await db.from('records').select('id,module,payload,created_at,updated_at').order('created_at',{ascending:false});
   if(error){
     console.error('[sync] falha ao carregar registros',error.message);
     authStatus.textContent='Não foi possível carregar a base: '+error.message;
@@ -85,7 +86,7 @@ loadCloud=async function(){
   const next={...data};
   recordModules.forEach(module=>next[module]=[]);
   rows.forEach(row=>{
-    if(recordModules.includes(row.module))next[row.module].push({...row.payload,_id:row.id});
+    if(recordModules.includes(row.module))next[row.module].push({...row.payload,_id:row.id,_createdAt:row.created_at||null,_updatedAt:row.updated_at||null});
   });
   data=next;
   localStorage.setItem('otica-data',JSON.stringify(data));
@@ -141,7 +142,7 @@ recordForm.onsubmit=async e=>{
     const query=id
       ?db.from('records').update({payload,updated_at:new Date().toISOString()}).eq('id',id).eq('module',module)
       :db.from('records').insert({module,payload});
-    const {data:saved,error}=await query.select('id,module,payload').single();
+    const {data:saved,error}=await query.select('id,module,payload,created_at,updated_at').single();
     if(error||!saved)throw new Error(error?.message||'o banco não confirmou a alteração');
     console.info('[sync] alteração confirmada',{action:id?'update':'insert',module});
     upsertLocalRecord(saved);
@@ -214,4 +215,122 @@ document.addEventListener('visibilitychange',()=>{
 });
 
 startCloud();
+</script>
+<style>
+#periodFilter[hidden]{display:none}.filter-count{color:var(--muted);font-size:13px;align-self:center;white-space:nowrap}
+@media(max-width:680px){#periodFilter{flex:1;min-width:145px}.filter-count{width:100%;padding-left:2px}}
+</style>
+<script>
+// Filtros por período e endurecimento da renderização dos dados cadastrados.
+const periodFilter=document.createElement('select');
+periodFilter.id='periodFilter';
+periodFilter.setAttribute('aria-label','Filtrar por período');
+periodFilter.innerHTML='<option value="">Todo o período</option><option value="week">Esta semana</option><option value="month">Este mês</option>';
+filter.insertAdjacentElement('afterend',periodFilter);
+const filterCount=document.createElement('span');
+filterCount.className='filter-count';
+filterCount.setAttribute('aria-live','polite');
+periodFilter.insertAdjacentElement('afterend',filterCount);
+const periodModules=new Set(['exames','leads-otica','leads-clinica']);
+
+sections['leads-otica'].c=['Contato','Cadastro','Telefone','Interesse','Origem','Status'];
+sections['leads-clinica'].c=['Contato','Cadastro','Telefone','Interesse','Origem','Status'];
+
+function safeText(value){
+  return String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+}
+
+function safeTag(status){
+  const value=String(status||'');
+  const css=['Confirmado','Concluído','Convertido','Agendado','Em dia','Quitado','Pago','Ativo'].includes(value)?'ok':['Atrasado','Perdido'].includes(value)?'bad':'';
+  return `<span class="tag ${css}">${safeText(value||'—')}</span>`;
+}
+
+function parseRecordDate(value){
+  if(!value)return null;
+  const text=String(value);
+  const local=text.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/);
+  const date=local?new Date(Number(local[1]),Number(local[2])-1,Number(local[3]),Number(local[4]||0),Number(local[5]||0)):new Date(text);
+  return Number.isNaN(date.getTime())?null:date;
+}
+
+function displayDate(value,includeTime=false){
+  const date=parseRecordDate(value);
+  if(!date)return'—';
+  return new Intl.DateTimeFormat('pt-BR',includeTime?{dateStyle:'short',timeStyle:'short'}:{dateStyle:'short'}).format(date);
+}
+
+function matchesPeriod(record,period){
+  if(!period)return true;
+  const value=current==='exames'?record.date:record._createdAt;
+  const date=parseRecordDate(value);
+  if(!date)return false;
+  const now=new Date(),startToday=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+  if(period==='month')return date>=new Date(now.getFullYear(),now.getMonth(),1)&&date<new Date(now.getFullYear(),now.getMonth()+1,1);
+  const monday=new Date(startToday);
+  monday.setDate(monday.getDate()-((monday.getDay()+6)%7));
+  const nextMonday=new Date(monday);
+  nextMonday.setDate(nextMonday.getDate()+7);
+  return date>=monday&&date<nextMonday;
+}
+
+function safeValues(module,record){
+  if(module==='usuarios')return [`<b>${safeText(record.email)}</b>`,record.role==='owner'?'Proprietário':record.role==='admin'?'Administrador':'Funcionário',safeTag(record.confirmed?'Ativo':'Pendente')];
+  if(module==='exames')return [`<b>${safeText(record.name)}</b>`,safeText(record.phone||'—'),safeText(examDateTime(record.date)),safeText(record.type),safeTag(record.status)];
+  if(module.startsWith('leads'))return [`<b>${safeText(record.name)}</b>`,safeText(displayDate(record._createdAt)),safeText(record.phone||'—'),safeText(record.type),safeText(record.owner),safeTag(record.status)];
+  if(module==='comissoes')return [safeText(record.name),safeText(displayDate(record.date)),safeText(record.type),safeText((record.rate||0)+'%'),safeText(money(Number(record.value||0)*Number(record.rate||0)/100))];
+  return [safeText(record.name),module==='pastores'?safeText(record.owner):safeText(displayDate(record.date)),safeText((record.type||0)+'x'),safeText(money(record.value)),safeTag(record.status)];
+}
+
+function updatePeriodVisibility(){
+  const active=periodModules.has(current);
+  periodFilter.hidden=!active;
+  filterCount.hidden=!active;
+  if(!active)periodFilter.value='';
+}
+
+render=function(){
+  const section=sections[current];
+  if(!section)return;
+  updatePeriodVisibility();
+  const term=search.value.trim().toLocaleLowerCase('pt-BR'),status=filter.value,period=periodFilter.value;
+  sectionTitle.textContent=section.t;
+  sectionDesc.textContent=section.d;
+  thead.innerHTML=section.c.map(label=>`<th>${safeText(label)}</th>`).join('')+'<th>Ações</th>';
+  filter.innerHTML='<option value="">Todos os status</option>'+section.s.map(value=>`<option ${value===status?'selected':''}>${safeText(value)}</option>`).join('');
+  const records=(data[current]||[]).filter(record=>(!status||record.status===status)&&(!term||Object.values(record).join(' ').toLocaleLowerCase('pt-BR').includes(term))&&matchesPeriod(record,period));
+  filterCount.textContent=`${records.length} ${records.length===1?'resultado':'resultados'}`;
+  const row=record=>{
+    const id=safeText(record._id||record.id||''),name=safeText(record.name||record.email||'este registro');
+    const actions=current==='usuarios'?(record.role==='owner'?'<span class="tag">Conta principal</span>':`<button class="btn" style="color:var(--red)" data-delete-user="${id}" data-name="${name}">Excluir acesso</button>`):`<button class="btn" data-edit="${id}">Editar</button> <button class="btn" style="color:var(--red)" data-delete="${id}" data-name="${name}">Excluir</button>`;
+    return `<tr>${safeValues(current,record).map(value=>`<td>${value||'—'}</td>`).join('')}<td style="white-space:nowrap">${actions}</td></tr>`;
+  };
+  if(current==='exames'&&records.length){
+    const groups=[['Terça-feira',2],['Quinta-feira',4],['Sábado',6]];
+    tbody.innerHTML=groups.map(([label,day])=>{
+      const items=records.filter(record=>examDay(record.date)===day).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+      return `<tr class="day-group"><td colspan="${section.c.length+1}">${label}<span class="day-count">${items.length} agendamento${items.length===1?'':'s'}</span></td></tr>`+(items.length?items.map(row).join(''):`<tr><td colspan="${section.c.length+1}" class="empty">Nenhum exame neste dia.</td></tr>`);
+    }).join('');
+    return;
+  }
+  tbody.innerHTML=records.length?records.map(row).join(''):`<tr><td colspan="${section.c.length+1}" class="empty">Nenhum registro encontrado.</td></tr>`;
+};
+
+periodFilter.onchange=render;
+const showBeforePeriod=show;
+show=function(module){
+  showBeforePeriod(module);
+  updatePeriodVisibility();
+};
+
+document.querySelector('.profile').onclick=async()=>{
+  cloudReadSerial++;
+  clearTimeout(cloudRefreshTimer);
+  if(recordsChannel){await db.removeChannel(recordsChannel);recordsChannel=null;}
+  localStorage.removeItem('otica-data');
+  await db.auth.signOut();
+  authGate.classList.remove('hidden');
+};
+
+updatePeriodVisibility();
 </script></body></html>

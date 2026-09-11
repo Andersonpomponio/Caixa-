@@ -13,6 +13,8 @@ create table if not exists public.records (
 
 create index if not exists records_module_created_idx
   on public.records (module, created_at desc);
+create index if not exists records_created_by_idx
+  on public.records (created_by);
 
 create table if not exists public.team_members (
   user_id uuid primary key references auth.users(id) on delete cascade,
@@ -28,6 +30,14 @@ revoke all on table public.records from anon, authenticated;
 revoke all on table public.team_members from anon, authenticated;
 grant select, insert, update, delete on table public.records to authenticated;
 grant select on table public.team_members to authenticated;
+
+-- Funções administrativas não devem ficar disponíveis pela API pública.
+do $$
+begin
+  if to_regprocedure('public.rls_auto_enable()') is not null then
+    execute 'revoke execute on function public.rls_auto_enable() from public, anon, authenticated';
+  end if;
+end $$;
 
 create policy "members can view own role" on public.team_members
   for select to authenticated using (user_id = (select auth.uid()));
