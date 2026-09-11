@@ -646,7 +646,16 @@ function mergeBillVersions(remoteItems, localItems){
   activeBills(remoteItems).forEach(item=>merged.set(item.id, item));
   activeBills(localItems).forEach(item=>{
     const current = merged.get(item.id);
-    if(!current || (item.updatedAt && (!current.updatedAt || item.updatedAt >= current.updatedAt))){
+    // Neste app não existe ação de desfazer pagamento. Portanto, uma cópia
+    // antiga em aberto nunca pode substituir outra que já foi paga.
+    const paymentTakesPriority = current && Boolean(item.paid) !== Boolean(current.paid)
+      ? Boolean(item.paid)
+      : null;
+    if(!current || paymentTakesPriority === true || (
+      paymentTakesPriority === null
+      && item.updatedAt
+      && (!current.updatedAt || item.updatedAt >= current.updatedAt)
+    )){
       merged.set(item.id, item);
     }
   });
@@ -788,8 +797,17 @@ async function upsertCloudBills(items){
   const {data, error} = await supabaseClient
     .from('shared_cash_bills')
     .upsert(pending.map(billToCloudRow), {onConflict:'id'})
-    .select('id');
-  if(error || !Array.isArray(data) || data.length!==pending.length){
+    .select('id,paid,paid_date,updated_at');
+  const expectedById = new Map(pending.map(item=>[item.id, item]));
+  const fullyConfirmed = Array.isArray(data)
+    && data.length===pending.length
+    && data.every(row=>{
+      const expected = expectedById.get(row.id);
+      return expected
+        && Boolean(row.paid)===Boolean(expected.paid)
+        && (row.paid_date || null)===(expected.paidDate || null);
+    });
+  if(error || !fullyConfirmed){
     console.error('[sync] Falha ao enviar boletos', error || 'confirmação incompleta');
     updateSyncUi('Boleto salvo neste aparelho; sincronização pendente.');
     scheduleSyncRetry();
@@ -984,9 +1002,9 @@ async function pushCloudState(){
   }
   const payload = mergedCloudPayload(current && current.data);
   stores = payload.stores;
-  bills = payload.bills;
   lsSet('stores', stores);
-  lsSet('bills', bills);
+  // Boletos e lançamentos vêm somente das tabelas oficiais. A cópia antiga
+  // dentro de shared_cash_state não pode reabrir um boleto já pago.
   const {error} = await supabaseClient.from('shared_cash_state').upsert({
     id: 'central',
     data: payload,
