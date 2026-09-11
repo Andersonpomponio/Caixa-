@@ -18,7 +18,14 @@ const sections={exames:{t:'Exames',d:'Agenda de exames, retornos e receitas dos 
 const seed={exames:[{name:'Marina Costa',date:'2026-09-03T09:00',type:'Exame de vista',owner:'Dra. Helena',status:'Confirmado'},{name:'João Mendes',date:'2026-09-03T10:30',type:'Retorno',owner:'Dr. Paulo',status:'Pendente'}],'leads-otica':[{name:'Renata Lima',phone:'(11) 98888-1010',type:'Lente multifocal',owner:'Instagram',status:'Novo'},{name:'Pedro Nunes',phone:'(11) 97777-2020',type:'Armação masculina',owner:'WhatsApp',status:'Em atendimento'}],'leads-clinica':[{name:'Clara Souza',phone:'(11) 96666-3030',type:'Exame de vista',owner:'Indicação',status:'Agendado'}],comissoes:[{name:'Fernanda',date:'2026-09-02',type:'Lente Premium',value:1200,rate:5,status:'Pendente'}],pastores:[{name:'Roberto Silva',owner:'Igreja Esperança',type:5,value:900,date:'2026-09-10',status:'Em dia'}],crediarios:[{name:'Luciana Alves',type:5,value:900,date:'2026-09-08',status:'Em dia'},{name:'Carlos Ferreira',type:3,value:720,date:'2026-08-30',status:'Atrasado'}]};let data;try{data=JSON.parse(localStorage.getItem('otica-data'))||seed}catch{data=seed}let current='inicio';const money=v=>Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}),dt=v=>v?new Date(v).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:String(v).includes('T')?'short':undefined}):'—',tag=s=>`<span class="tag ${['Confirmado','Concluído','Convertido','Agendado','Em dia','Quitado','Pago'].includes(s)?'ok':['Atrasado','Perdido'].includes(s)?'bad':''}">${s}</span>`;
 function vals(k,r){if(k==='exames')return [`<b>${r.name}</b><small>${r.phone||''}</small>`,dt(r.date),r.type,r.owner,tag(r.status)];if(k.startsWith('leads'))return [`<b>${r.name}</b>`,r.phone,r.type,r.owner,tag(r.status)];if(k==='comissoes')return [r.name,dt(r.date),r.type,r.rate+'%',money(r.value*r.rate/100)];return [r.name,k==='pastores'?r.owner:dt(r.date),r.type+'x',money(r.value),tag(r.status)]}function show(k){current=k;document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.id===k));inicio.classList.toggle('on',k==='inicio');lista.classList.toggle('on',k!=='inicio');title.textContent=k==='inicio'?'Visão geral':sections[k].t;if(k!=='inicio')render();scrollTo(0,0)}function render(){let s=sections[current],term=search.value.toLowerCase(),st=filter.value;sectionTitle.textContent=s.t;sectionDesc.textContent=s.d;thead.innerHTML=s.c.map(x=>`<th>${x}</th>`).join('');filter.innerHTML='<option value="">Todos os status</option>'+s.s.map(x=>`<option ${x===st?'selected':''}>${x}</option>`).join('');let rs=data[current].filter(r=>(!st||r.status===st)&&(!term||Object.values(r).join(' ').toLowerCase().includes(term)));tbody.innerHTML=rs.length?rs.map(r=>`<tr>${vals(current,r).map(x=>`<td>${x||'—'}</td>`).join('')}</tr>`).join(''):`<tr><td colspan="${s.c.length}" class="empty">Nenhum registro encontrado.</td></tr>`}function open(k=current==='inicio'?'exames':current){show(k);let s=sections[k];modalTitle.textContent='Novo · '+s.t;fields.innerHTML=s.f.map(x=>`<div class="field"><label>${x[0]}</label>${x[2]==='select'?`<select name="${x[1]}" required>${x[3].split('|').map(o=>`<option>${o}</option>`).join('')}</select>`:`<input name="${x[1]}" type="${x[2]}" ${x[2]==='number'?'min="0" step="0.01"':''} required>`}</div>`).join('');modal.classList.add('on')}function shut(){modal.classList.remove('on');recordForm.reset()}nav.onclick=e=>{let b=e.target.closest('button');if(b)show(b.dataset.id)};document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>show(b.dataset.go));document.querySelectorAll('[data-new]').forEach(b=>b.onclick=()=>open(b.dataset.new));newTop.onclick=addBtn.onclick=()=>open();const closeModalButton=document.getElementById('close'),cancelModalButton=document.getElementById('cancel'),modalBackdrop=document.getElementById('modal');closeModalButton.addEventListener('click',shut);cancelModalButton.addEventListener('click',shut);modalBackdrop.addEventListener('click',e=>{if(e.target===modalBackdrop)shut()});document.addEventListener('keydown',e=>{if(e.key==='Escape'&&modalBackdrop.classList.contains('on'))shut()});search.oninput=filter.onchange=render;recordForm.onsubmit=e=>{e.preventDefault();data[current].unshift(Object.fromEntries(new FormData(recordForm)));localStorage.setItem('otica-data',JSON.stringify(data));render();shut();toast.classList.add('on');setTimeout(()=>toast.classList.remove('on'),2200)};exportBtn.onclick=()=>{let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)]));a.download='backup-otica-central.json';a.click()};today.textContent=new Intl.DateTimeFormat('pt-BR',{weekday:'long',day:'2-digit',month:'long'}).format(new Date());if('serviceWorker'in navigator)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
 </script><script>
-const cfg=window.OTICA_CONFIG||{},db=window.supabase?.createClient(cfg.supabaseUrl,cfg.supabasePublishableKey);
+// O sistema é somente online: remove o aplicativo antigo armazenado no celular.
+if('serviceWorker'in navigator)addEventListener('load',()=>setTimeout(async()=>{
+  const registrations=await navigator.serviceWorker.getRegistrations();
+  await Promise.all(registrations.map(registration=>registration.unregister()));
+  if('caches'in window){const keys=await caches.keys();await Promise.all(keys.map(key=>caches.delete(key)))}
+},800));
+</script><script>
+const cfg=window.OTICA_CONFIG||{};let db;if(window.supabase&&cfg.supabaseUrl&&cfg.supabasePublishableKey){db=window.supabase.createClient(cfg.supabaseUrl,cfg.supabasePublishableKey,{realtime:{worker:true,heartbeatCallback:status=>{if(status==='disconnected')db?.realtime.connect()}}})}
 const themeButton=document.createElement('button');themeButton.className='btn theme-toggle';themeButton.type='button';function paintThemeButton(){const dark=document.documentElement.classList.contains('dark');themeButton.textContent=dark?'☀':'☾';themeButton.title=dark?'Usar tema claro':'Usar tema escuro';themeButton.setAttribute('aria-label',themeButton.title)}paintThemeButton();document.querySelector('.top>div:last-child').prepend(themeButton);themeButton.onclick=()=>{document.documentElement.classList.toggle('dark');localStorage.setItem('otica-theme',document.documentElement.classList.contains('dark')?'dark':'light');paintThemeButton()};
 const refreshButton=document.createElement('button');refreshButton.className='btn';refreshButton.type='button';refreshButton.textContent='⟳ Atualizar';refreshButton.title='Buscar os dados mais recentes';document.querySelector('.top>div:last-child').prepend(refreshButton);refreshButton.onclick=async()=>{if(refreshButton.disabled)return;refreshButton.disabled=true;refreshButton.textContent='⟳ Atualizando…';try{await startRealtime();const ok=await Promise.race([loadCloud(),new Promise((_,reject)=>setTimeout(()=>reject(new Error('A atualização demorou demais.')),10000))]);if(!ok)throw new Error('Não foi possível buscar os dados.');await updateRole();if(current==='usuarios')await loadUsers();refreshButton.textContent='✓ Atualizado';toast.textContent='Conexão ao vivo e dados atualizados.';toast.classList.add('on');setTimeout(()=>toast.classList.remove('on'),2200)}catch(error){refreshButton.textContent='Tentar novamente';toast.textContent=error?.message||'Não foi possível atualizar.';toast.classList.add('on');setTimeout(()=>toast.classList.remove('on'),3500)}finally{setTimeout(()=>{refreshButton.disabled=false;refreshButton.textContent='⟳ Atualizar'},1600)}};
 sections.usuarios={t:'Usuários',d:'Acessos autorizados ao painel da ótica.',c:['Usuário','Perfil','Situação'],s:['Ativo'],f:[['E-mail do usuário','email','email'],['Senha inicial','password','password'],['Perfil','role','select','Funcionário|Administrador']]};data.usuarios=[];
@@ -158,9 +165,28 @@ recordForm.onsubmit=async e=>{
   }
 };
 
+function confirmAction(message){
+  return new Promise(resolve=>{
+    const backdrop=document.createElement('div');
+    backdrop.className='confirm-bg';
+    backdrop.innerHTML='<div class="confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle"><div class="confirm-icon">!</div><h2 id="confirmTitle">Confirmar exclusão</h2><p></p><div class="confirm-actions"><button type="button" class="btn" data-confirm="no">Cancelar</button><button type="button" class="btn danger" data-confirm="yes">Excluir definitivamente</button></div></div>';
+    backdrop.querySelector('p').textContent=message;
+    const finish=value=>{backdrop.remove();resolve(value)};
+    backdrop.addEventListener('click',event=>{
+      const choice=event.target.closest('[data-confirm]');
+      if(choice)finish(choice.dataset.confirm==='yes');
+      else if(event.target===backdrop)finish(false);
+    });
+    document.body.appendChild(backdrop);
+    backdrop.querySelector('[data-confirm="no"]').focus();
+  });
+}
+
 deleteRecord=async function(id,name,button){
-  if(!id||recordMutationPending||!confirm(`Excluir ${name}? Esta ação não pode ser desfeita.`))return;
+  if(!id||recordMutationPending)return;
   recordMutationPending=true;
+  const confirmed=await confirmAction(`Excluir ${name}? Esta ação não pode ser desfeita.`);
+  if(!confirmed){recordMutationPending=false;return;}
   const module=current;
   const previousLabel=button?.textContent;
   if(button){button.disabled=true;button.textContent='Excluindo…';}
@@ -250,8 +276,8 @@ document.addEventListener('visibilitychange',()=>{
 startCloud();
 </script>
 <style>
-#periodFilter[hidden]{display:none}.filter-count{color:var(--muted);font-size:13px;align-self:center;white-space:nowrap}button:disabled{cursor:wait;opacity:.62}#signupBtn{display:none}.auth-actions{grid-template-columns:1fr}
-@media(max-width:680px){#periodFilter{flex:1;min-width:145px}.filter-count{width:100%;padding-left:2px}}
+#periodFilter[hidden]{display:none}.filter-count{color:var(--muted);font-size:13px;align-self:center;white-space:nowrap}button:disabled{cursor:wait;opacity:.62}#signupBtn{display:none}.auth-actions{grid-template-columns:1fr}.confirm-bg{position:fixed;z-index:100;inset:0;display:grid;place-items:center;padding:18px;background:#071b1db8;backdrop-filter:blur(7px)}.confirm-card{width:min(420px,100%);padding:25px;border:1px solid var(--line);border-radius:22px;background:var(--card);color:var(--ink);box-shadow:0 32px 100px #061b1d66;text-align:center}.confirm-card h2{margin:10px 0 8px;font-size:23px}.confirm-card p{margin:0;color:var(--muted);line-height:1.5}.confirm-icon{display:grid;place-items:center;width:46px;height:46px;margin:auto;border-radius:50%;background:#f5dedb;color:var(--red);font-size:25px;font-weight:900}.confirm-actions{display:grid;grid-template-columns:1fr 1.35fr;gap:10px;margin-top:22px}.btn.danger{border-color:var(--red);background:var(--red);color:white}
+@media(max-width:680px){#periodFilter{flex:1;min-width:145px}.filter-count{width:100%;padding-left:2px}.confirm-actions{grid-template-columns:1fr}.confirm-actions .btn{min-height:48px;touch-action:manipulation}}
 </style>
 <script>
 // Filtros por período e endurecimento da renderização dos dados cadastrados.
@@ -335,7 +361,7 @@ render=function(){
   filterCount.textContent=`${records.length} ${records.length===1?'resultado':'resultados'}`;
   const row=record=>{
     const id=safeText(record._id||record.id||''),name=safeText(record.name||record.email||'este registro');
-    const actions=current==='usuarios'?(record.role==='owner'?'<span class="tag">Conta principal</span>':`<button class="btn" style="color:var(--red)" data-delete-user="${id}" data-name="${name}">Excluir acesso</button>`):`<button class="btn" data-edit="${id}">Editar</button> <button class="btn" style="color:var(--red)" data-delete="${id}" data-name="${name}">Excluir</button>`;
+    const actions=current==='usuarios'?(record.role==='owner'?'<span class="tag">Conta principal</span>':`<button type="button" class="btn" style="color:var(--red)" data-delete-user="${id}" data-name="${name}">Excluir acesso</button>`):`<button type="button" class="btn" data-edit="${id}">Editar</button> <button type="button" class="btn" style="color:var(--red)" data-delete="${id}" data-name="${name}">Excluir</button>`;
     return `<tr>${safeValues(current,record).map(value=>`<td>${value||'—'}</td>`).join('')}<td style="white-space:nowrap">${actions}</td></tr>`;
   };
   if(current==='exames'&&records.length){
