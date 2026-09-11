@@ -279,7 +279,7 @@ document.addEventListener('visibilitychange',()=>{
 startCloud();
 </script>
 <style>
-#periodFilter[hidden]{display:none}.filter-count{color:var(--muted);font-size:13px;align-self:center;white-space:nowrap}button:disabled{cursor:wait;opacity:.62}#signupBtn{display:none}.auth-actions{grid-template-columns:1fr}.confirm-bg{position:fixed;z-index:100;inset:0;display:grid;place-items:center;padding:18px;background:#071b1db8;backdrop-filter:blur(7px)}.confirm-card{width:min(420px,100%);padding:25px;border:1px solid var(--line);border-radius:22px;background:var(--card);color:var(--ink);box-shadow:0 32px 100px #061b1d66;text-align:center}.confirm-card h2{margin:10px 0 8px;font-size:23px}.confirm-card p{margin:0;color:var(--muted);line-height:1.5}.confirm-icon{display:grid;place-items:center;width:46px;height:46px;margin:auto;border-radius:50%;background:#f5dedb;color:var(--red);font-size:25px;font-weight:900}.confirm-actions{display:grid;grid-template-columns:1fr 1.35fr;gap:10px;margin-top:22px}.btn.danger{border-color:var(--red);background:var(--red);color:white}
+#periodFilter[hidden],#examDayFilter[hidden]{display:none}.filter-count{color:var(--muted);font-size:13px;align-self:center;white-space:nowrap}button:disabled{cursor:wait;opacity:.62}#signupBtn{display:none}.auth-actions{grid-template-columns:1fr}.confirm-bg{position:fixed;z-index:100;inset:0;display:grid;place-items:center;padding:18px;background:#071b1db8;backdrop-filter:blur(7px)}.confirm-card{width:min(420px,100%);padding:25px;border:1px solid var(--line);border-radius:22px;background:var(--card);color:var(--ink);box-shadow:0 32px 100px #061b1d66;text-align:center}.confirm-card h2{margin:10px 0 8px;font-size:23px}.confirm-card p{margin:0;color:var(--muted);line-height:1.5}.confirm-icon{display:grid;place-items:center;width:46px;height:46px;margin:auto;border-radius:50%;background:#f5dedb;color:var(--red);font-size:25px;font-weight:900}.confirm-actions{display:grid;grid-template-columns:1fr 1.35fr;gap:10px;margin-top:22px}.btn.danger{border-color:var(--red);background:var(--red);color:white}
 @media(max-width:680px){#periodFilter{flex:1;min-width:145px}.filter-count{width:100%;padding-left:2px}.confirm-actions{grid-template-columns:1fr}.confirm-actions .btn{min-height:48px;touch-action:manipulation}}
 </style>
 <script>
@@ -289,10 +289,15 @@ periodFilter.id='periodFilter';
 periodFilter.setAttribute('aria-label','Filtrar por período');
 periodFilter.innerHTML='<option value="">Todo o período</option><option value="week">Esta semana</option><option value="month">Este mês</option>';
 filter.insertAdjacentElement('afterend',periodFilter);
+const examDayFilter=document.createElement('select');
+examDayFilter.id='examDayFilter';
+examDayFilter.setAttribute('aria-label','Filtrar exames por dia');
+examDayFilter.innerHTML='<option value="">Todos os dias</option><option value="2">Terça-feira</option><option value="4">Quinta-feira</option><option value="6">Sábado</option>';
+periodFilter.insertAdjacentElement('afterend',examDayFilter);
 const filterCount=document.createElement('span');
 filterCount.className='filter-count';
 filterCount.setAttribute('aria-live','polite');
-periodFilter.insertAdjacentElement('afterend',filterCount);
+examDayFilter.insertAdjacentElement('afterend',filterCount);
 const rankingPanel=document.createElement('section');
 rankingPanel.id='salesRanking';
 rankingPanel.className='ranking-panel';
@@ -374,6 +379,7 @@ function updatePeriodVisibility(){
   periodFilter.options[0].hidden=current==='comissoes';
   periodFilter.options[0].disabled=current==='comissoes';
   periodFilter.hidden=!active;
+  examDayFilter.hidden=current!=='exames';
   filterCount.hidden=!active;
   if(current==='comissoes'&&!['week','month'].includes(periodFilter.value))periodFilter.value='week';
   else if(!active)periodFilter.value='';
@@ -386,12 +392,12 @@ render=function(){
   const supportsStatus=section.s.length>0;
   if(!supportsStatus)filter.value='';
   filter.hidden=!supportsStatus;
-  const term=search.value.trim().toLocaleLowerCase('pt-BR'),status=supportsStatus?filter.value:'',period=periodFilter.value;
+  const term=search.value.trim().toLocaleLowerCase('pt-BR'),status=supportsStatus?filter.value:'',period=periodFilter.value,selectedDay=examDayFilter.value;
   sectionTitle.textContent=section.t;
   sectionDesc.textContent=section.d;
   thead.innerHTML=section.c.map(label=>`<th>${safeText(label)}</th>`).join('')+'<th>Ações</th>';
   filter.innerHTML='<option value="">Todos os status</option>'+section.s.map(value=>`<option ${value===status?'selected':''}>${safeText(value)}</option>`).join('');
-  const records=(data[current]||[]).filter(record=>(!status||record.status===status)&&(!term||Object.values(record).join(' ').toLocaleLowerCase('pt-BR').includes(term))&&matchesPeriod(record,period));
+  const records=(data[current]||[]).filter(record=>(!status||record.status===status)&&(!term||Object.values(record).join(' ').toLocaleLowerCase('pt-BR').includes(term))&&matchesPeriod(record,period)&&(current!=='exames'||!selectedDay||examDay(record.date)===Number(selectedDay)));
   filterCount.textContent=`${records.length} ${records.length===1?'resultado':'resultados'}`;
   renderSalesRanking(records,period);
   const row=record=>{
@@ -399,8 +405,8 @@ render=function(){
     const actions=current==='usuarios'?(record.role==='owner'?'<span class="tag">Conta principal</span>':`<button type="button" class="btn" style="color:var(--red)" data-delete-user="${id}" data-name="${name}">Excluir acesso</button>`):current==='exames'?`<button type="button" class="btn icon-action" data-edit="${id}" title="Editar exame" aria-label="Editar exame de ${name}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11-11-4-4L4 16v4Zm10-14 4 4 2-2a1.4 1.4 0 0 0 0-2l-2-2a1.4 1.4 0 0 0-2 0l-2 2Z"/></svg></button> <button type="button" class="btn icon-action icon-delete" data-delete="${id}" data-name="${name}" title="Excluir exame" aria-label="Excluir exame de ${name}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8l1 2h4v2H3V6h4l1-2Zm-2 6h12l-1 10H7L6 10Zm3 2v6h2v-6H9Zm4 0v6h2v-6h-2Z"/></svg></button>`:`<button type="button" class="btn" data-edit="${id}">Editar</button> <button type="button" class="btn" style="color:var(--red)" data-delete="${id}" data-name="${name}">Excluir</button>`;
     return `<tr>${safeValues(current,record).map((value,index)=>`<td data-label="${safeText(section.c[index])}">${value||'—'}</td>`).join('')}<td data-label="Ações" class="record-actions">${actions}</td></tr>`;
   };
-  if(current==='exames'&&records.length){
-    const groups=[['Terça-feira',2],['Quinta-feira',4],['Sábado',6]];
+  if(current==='exames'){
+    const groups=[['Terça-feira',2],['Quinta-feira',4],['Sábado',6]].filter(([,day])=>!selectedDay||day===Number(selectedDay));
     tbody.innerHTML=groups.map(([label,day])=>{
       const items=records.filter(record=>examDay(record.date)===day).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
       return `<tr class="day-group"><td colspan="${section.c.length+1}">${label}<span class="day-count">${items.length} agendamento${items.length===1?'':'s'}</span></td></tr>`+(items.length?items.map(row).join(''):`<tr><td colspan="${section.c.length+1}" class="empty">Nenhum exame neste dia.</td></tr>`);
@@ -411,6 +417,7 @@ render=function(){
 };
 
 periodFilter.onchange=render;
+examDayFilter.onchange=render;
 const showBeforePeriod=show;
 show=function(module){
   showBeforePeriod(module);
@@ -430,13 +437,13 @@ updatePeriodVisibility();
 </script>
 <style>
 .ranking-panel[hidden]{display:none}.ranking-panel{margin:0 0 15px;padding:20px;border:1px solid var(--line);border-radius:19px;background:var(--card);box-shadow:var(--shadow)}.ranking-head{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:13px}.ranking-head h3{margin:4px 0 0;font-size:20px}.ranking-period{padding:7px 11px;border-radius:99px;background:var(--soft);color:var(--green);font-size:12px;font-weight:850}.ranking-list{display:grid;gap:7px}.ranking-item{display:grid;grid-template-columns:46px minmax(0,1fr) auto;gap:11px;align-items:center;padding:11px 12px;border:1px solid var(--line);border-radius:13px;background:var(--paper)}.ranking-position{display:grid;place-items:center;width:36px;height:36px;border-radius:11px;background:var(--soft);color:var(--green);font-weight:900}.ranking-item:first-child .ranking-position{background:var(--gold);color:#17231d}.ranking-item b{font-size:14px}.ranking-item small{display:block;margin-top:3px;color:var(--muted);font-size:12px}.ranking-item strong{font-size:15px;white-space:nowrap}.ranking-empty{padding:24px;text-align:center;color:var(--muted)}
-.icon-action{display:inline-grid;place-items:center;width:42px;height:42px;padding:0!important;color:var(--green)}.icon-action svg{width:19px;height:19px;fill:currentColor}.icon-action.icon-delete{color:var(--red)}
+.icon-action{display:inline-grid;place-items:center;width:36px;height:36px;padding:0!important;color:var(--green)}.icon-action svg{width:15px;height:15px;fill:currentColor}.icon-action.icon-delete{color:var(--red)}
 @media(max-width:680px){
   html{font-size:16px}body{overflow-x:hidden;-webkit-text-size-adjust:100%}.app{min-width:0}.side{left:0;right:0;bottom:0;width:100%;padding:7px 7px calc(7px + env(safe-area-inset-bottom));overflow:hidden}.nav{display:flex;gap:5px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity;scrollbar-width:none}.nav::-webkit-scrollbar{display:none}.nav button{flex:0 0 76px;min-height:54px;padding:8px 4px;font-size:11px;line-height:1.15;scroll-snap-align:start;white-space:normal}.nav button.on:after{bottom:3px}
   main{min-width:0;padding:18px 12px calc(82px + env(safe-area-inset-bottom))}.top{display:grid;align-items:start;gap:14px;margin-bottom:20px}.top h1{font-size:clamp(27px,9vw,34px)}.top>div:last-child{display:grid;grid-template-columns:minmax(0,1fr) 44px minmax(0,1fr);gap:7px;width:100%}.top .btn{display:flex!important;align-items:center;justify-content:center;min-width:0;min-height:44px;padding:8px 7px;font-size:12px;white-space:nowrap}.top .theme-toggle{min-width:44px;font-size:18px}
   .hero{padding:20px;border-radius:19px}.hero h2{font-size:23px}.hero p{font-size:14px}.stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.stat{min-width:0;padding:14px}.stat small{font-size:12px}.stat strong{font-size:21px;overflow-wrap:anywhere}.panel{padding:17px;border-radius:17px}.quick{grid-template-columns:1fr 1fr}.quick button{min-height:52px;padding:12px;font-size:13px}
   .page-head{align-items:flex-end;gap:9px}.page-head>div{min-width:0}.page-head h2{font-size:25px}.page-head .btn{flex:0 0 auto;min-height:44px;padding:9px 12px}.tools{display:grid;grid-template-columns:1fr 1fr;gap:8px}.tools input{grid-column:1/-1;width:100%;min-width:0}.tools select{width:100%;min-width:0;padding:10px;font-size:14px}.filter-count{grid-column:1/-1;width:100%;padding-left:2px}.ranking-panel{padding:15px;border-radius:16px}.ranking-head{align-items:flex-start}.ranking-head h3{font-size:18px}.ranking-item{grid-template-columns:42px minmax(0,1fr);padding:10px}.ranking-item strong{grid-column:2;white-space:normal}.ranking-period{font-size:11px}
-  .table{overflow:visible;border:0;background:transparent!important;box-shadow:none}table{min-width:0}thead{display:none}table,tbody{display:block;width:100%}tbody{display:grid;gap:10px}tbody tr:not(.day-group){display:block;overflow:hidden;border:1px solid var(--line);border-radius:16px;background:var(--card);box-shadow:0 8px 24px rgba(18,54,57,.07)}tbody tr:not(.day-group) td{display:grid;grid-template-columns:minmax(88px,34%) minmax(0,1fr);gap:10px;align-items:center;width:100%;min-height:44px;padding:11px 13px;border-top:1px solid var(--line);background:transparent!important;color:var(--ink)!important;overflow-wrap:anywhere}tbody tr:not(.day-group) td:first-child{border-top:0}tbody tr:not(.day-group) td::before{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:800}tbody tr:not(.day-group) td.empty{display:block;padding:28px 16px;text-align:center}tbody tr:not(.day-group) td.empty::before{display:none}.record-actions{display:flex!important;justify-content:flex-end;gap:7px;white-space:normal!important}.record-actions::before{margin-right:auto}.record-actions .btn{min-height:42px;padding:8px 11px;font-size:13px;touch-action:manipulation}.day-group{display:block}.day-group td{display:block!important;width:100%;padding:11px 12px;border-top:0;border-radius:12px}.day-group td::before{display:none}.day-count{margin-left:8px}
+  .table{overflow:visible;border:0;background:transparent!important;box-shadow:none}table{min-width:0}thead{display:none}table,tbody{display:block;width:100%}tbody{display:grid;gap:10px}tbody tr:not(.day-group){display:block;overflow:hidden;border:1px solid var(--line);border-radius:16px;background:var(--card);box-shadow:0 8px 24px rgba(18,54,57,.07)}tbody tr:not(.day-group) td{display:grid;grid-template-columns:minmax(88px,34%) minmax(0,1fr);gap:10px;align-items:center;width:100%;min-height:44px;padding:11px 13px;border-top:1px solid var(--line);background:transparent!important;color:var(--ink)!important;overflow-wrap:anywhere}tbody tr:not(.day-group) td:first-child{border-top:0}tbody tr:not(.day-group) td::before{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:800}tbody tr:not(.day-group) td.empty{display:block;padding:28px 16px;text-align:center}tbody tr:not(.day-group) td.empty::before{display:none}.record-actions{display:flex!important;justify-content:flex-end;gap:7px;white-space:normal!important}.record-actions::before{margin-right:auto}.record-actions .btn{min-height:42px;padding:8px 11px;font-size:13px;touch-action:manipulation}.record-actions .icon-action{width:36px;height:36px;min-height:36px;padding:0!important}.day-group{display:block}.day-group td{display:block!important;width:100%;padding:11px 12px;border-top:0;border-radius:12px}.day-group td::before{display:none}.day-count{margin-left:8px}
   .modal-bg{align-items:end;padding:0}.modal{width:100%;max-height:92dvh;overflow-y:auto;border-radius:22px 22px 0 0;padding:21px 16px calc(18px + env(safe-area-inset-bottom))}.modal h2{font-size:22px}.form{gap:12px}.field input,.field select,.auth-card input{min-height:48px;font-size:16px}.modal-actions .btn{min-height:46px}.auth{padding:14px}.auth-card{padding:24px 18px;border-radius:20px}.auth-card h2{font-size:27px}.confirm-bg{align-items:end;padding:0}.confirm-card{width:100%;border-radius:22px 22px 0 0;padding:22px 16px calc(18px + env(safe-area-inset-bottom))}.confirm-actions{grid-template-columns:1fr}.confirm-actions .btn{min-height:48px}.toast{left:12px;right:12px;bottom:calc(76px + env(safe-area-inset-bottom));font-size:14px}
 }
 @media(max-width:370px){.stats{grid-template-columns:1fr}.top .btn{font-size:11px}.nav button{flex-basis:72px}.quick{grid-template-columns:1fr}.page-head{align-items:center}.page-head .btn{padding-inline:10px}}
