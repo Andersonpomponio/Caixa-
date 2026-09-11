@@ -549,10 +549,12 @@ let syncRefreshPromise = null;
 let syncRefreshAgain = false;
 let syncRetryTimer = null;
 let syncResumeTimer = null;
+let syncPollTimer = null;
 let realtimeStatus = 'CLOSED';
 let localChangeVersion = 0;
 let deletedTransactionIds = new Set();
 let deletedBillIds = new Set();
+const SYNC_POLL_INTERVAL = 10000;
 const LOGIN_USERS = {
   anderson: {name:'Anderson', email:'anderson@caixacentral.local'},
   luciane: {name:'Luciane', email:'luciane@caixacentral.local'},
@@ -1017,6 +1019,21 @@ function scheduleSyncRetry(delay=5000){
   syncRetryTimer = setTimeout(()=>refreshCloudData(), delay);
 }
 
+function startSyncPolling(){
+  clearInterval(syncPollTimer);
+  if(!syncUser) return;
+  // O Realtime pode perder eventos quando o iPhone/iPad suspende o app.
+  // Esta conferência periódica recupera mudanças mesmo com o app aberto.
+  syncPollTimer = setInterval(()=>{
+    if(!document.hidden && navigator.onLine!==false) refreshCloudData();
+  }, SYNC_POLL_INTERVAL);
+}
+
+function stopSyncPolling(){
+  clearInterval(syncPollTimer);
+  syncPollTimer = null;
+}
+
 async function refreshCloudData({announce=false}={}){
   if(!supabaseClient || !syncUser || navigator.onLine===false) return false;
   if(syncRefreshPromise){
@@ -1124,6 +1141,7 @@ async function startRealtimeChannel(){
 
 function resumeSync(){
   if(!syncUser || document.hidden) return;
+  startSyncPolling();
   clearTimeout(syncResumeTimer);
   syncResumeTimer = setTimeout(async()=>{
     if(realtimeStatus!=='SUBSCRIBED') await startRealtimeChannel();
@@ -1133,7 +1151,10 @@ function resumeSync(){
 
 async function startSync(user){
   if(!supabaseClient || !user) return;
-  if(syncUser && syncUser.id === user.id) return;
+  if(syncUser && syncUser.id === user.id){
+    resumeSync();
+    return;
+  }
   const person = Object.values(LOGIN_USERS).find(item=>item.email===user.email);
   if(!person){
     await supabaseClient.auth.signOut();
@@ -1142,6 +1163,7 @@ async function startSync(user){
   }
   if(syncChannel) await syncChannel.unsubscribe();
   syncUser = user;
+  startSyncPolling();
   updateSyncUi('Conectando a sincronização…');
   const ready = await refreshCloudData({announce:true});
   await startRealtimeChannel();
@@ -1169,6 +1191,7 @@ async function initSync(){
       realtimeStatus = 'CLOSED';
       clearTimeout(syncRetryTimer);
       clearTimeout(syncResumeTimer);
+      stopSyncPolling();
       updateSyncUi();
       showLoginGate();
     }
