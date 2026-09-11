@@ -141,6 +141,13 @@
   .chart-empty{min-height:220px;display:grid;place-items:center;text-align:center;color:var(--ink-soft);font-size:13px;}
 
   /* transactions */
+  .tx-tools{display:grid;grid-template-columns:minmax(0,1fr) 148px;gap:8px;margin:-3px 0 10px;}
+  .tx-search,.tx-type-filter{width:100%;min-height:42px;border:1px solid var(--line);border-radius:11px;background:var(--surface-2);color:var(--ink);font:inherit;font-size:13px;}
+  .tx-search{padding:9px 12px;}
+  .tx-type-filter{padding:9px 30px 9px 10px;}
+  .tx-search:focus,.tx-type-filter:focus{outline:2px solid var(--blue);outline-offset:1px;}
+  .tx-results-info{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:2px 1px 8px;color:var(--ink-soft);font-size:11.5px;}
+  .tx-results-info strong{color:var(--ink);font-weight:700;}
   .tx-list{display:flex;flex-direction:column;gap:8px;}
   .tx{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--line);}
   .tx:last-child{border-bottom:none;}
@@ -154,6 +161,8 @@
   .tx-val.entrada{color:var(--teal);}
   .tx-val.saida{color:var(--red);}
   .tx-del{background:none;border:none;color:var(--ink-soft);opacity:.5;font-size:16px;cursor:pointer;padding:4px;flex-shrink:0;}
+  .tx-pagination{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:12px;}
+  @media(max-width:430px){.tx-tools{grid-template-columns:1fr;}.tx-type-filter{font-size:14px;}.tx-search{font-size:16px;}}
   .empty{text-align:center;padding:30px 10px;color:var(--ink-soft);font-size:13px;}
 
   /* fab */
@@ -412,7 +421,17 @@
 
   <div class="panel">
     <h2 id="txTitle">Lançamentos</h2>
+    <div class="tx-tools">
+      <input type="search" class="tx-search" id="txSearch" placeholder="Buscar categoria, descrição, loja ou valor" aria-label="Buscar lançamentos">
+      <select class="tx-type-filter" id="txTypeFilter" aria-label="Filtrar tipo de lançamento">
+        <option value="all">Todos</option>
+        <option value="entrada">Entradas</option>
+        <option value="saida">Saídas</option>
+      </select>
+    </div>
+    <div class="tx-results-info" id="txResultsInfo"></div>
     <div class="tx-list" id="txList"></div>
+    <div class="tx-pagination" id="txPagination"></div>
   </div>
 
   <div class="panel">
@@ -535,6 +554,10 @@ let billSearch = '';
 let billStatusFilter = 'all';
 let billPage = 1;
 const BILLS_PER_PAGE = 10;
+let txSearch = '';
+let txTypeFilter = 'all';
+let txPage = 1;
+const TX_PER_PAGE = 10;
 let periodDate = new Date(formatLocalDate(new Date()) + 'T00:00:00');
 
 const SUPABASE_URL = 'https://nynpmqlnxvmihusmfffo.supabase.co';
@@ -1448,14 +1471,14 @@ function renderTabs(){
   const allTab = document.createElement('button');
   allTab.className = 'tab' + (activeTab==='all' ? ' active' : '');
   allTab.innerHTML = 'Consolidado' + (allUrgent>0 ? `<span class="tab-badge">${allUrgent}</span>` : '');
-  allTab.onclick = ()=>{activeTab='all'; billPage=1; render();};
+  allTab.onclick = ()=>{activeTab='all'; billPage=1; txPage=1; render();};
   tabs.appendChild(allTab);
   stores.forEach(st=>{
     const urgent = pendingBillsFor(st.id).filter(b=>billDaysDiff(b.dueDate)<=0).length;
     const b = document.createElement('button');
     b.className = 'tab' + (activeTab===st.id ? ' active' : '');
     b.innerHTML = st.name + (urgent>0 ? `<span class="tab-badge">${urgent}</span>` : '');
-    b.onclick = ()=>{activeTab=st.id; billPage=1; render();};
+    b.onclick = ()=>{activeTab=st.id; billPage=1; txPage=1; render();};
     tabs.appendChild(b);
   });
 }
@@ -1590,15 +1613,41 @@ function renderTxList(){
   // A lista é o histórico da unidade. Os filtros mensal/semanal ficam nos
   // totais, gráficos e boletos, para um lançamento nunca parecer apagado
   // apenas por estar fora do período que está sendo analisado.
+  const normalizedSearch = txSearch.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
   const list = (activeTab==='all' ? transactions : transactions.filter(t=>t.storeId===activeTab))
+    .filter(t=>{
+      if(txTypeFilter!=='all' && t.type!==txTypeFilter) return false;
+      if(!normalizedSearch) return true;
+      const store = stores.find(s=>s.id===t.storeId);
+      const searchable = [
+        t.category, t.description, store?.name, t.date, t.type,
+        String(t.value), Number(t.value).toLocaleString('pt-BR',{minimumFractionDigits:2})
+      ].filter(Boolean).join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+      return searchable.includes(normalizedSearch);
+    })
     .slice()
-    .sort((a,b)=> b.date.localeCompare(a.date));
+    .sort((a,b)=> b.date.localeCompare(a.date) || String(b.id).localeCompare(String(a.id)));
   const el = document.getElementById('txList');
+  const resultsInfo = document.getElementById('txResultsInfo');
+  const pagination = document.getElementById('txPagination');
   if(list.length===0){
-    el.innerHTML = '<div class="empty">Nenhum lançamento ainda. Toque em + para adicionar.</div>';
+    const hasFilter = Boolean(normalizedSearch) || txTypeFilter!=='all';
+    resultsInfo.innerHTML = '<span><strong>0</strong> lançamentos encontrados</span>';
+    pagination.innerHTML = '';
+    el.innerHTML = `<div class="empty">${hasFilter ? 'Nenhum lançamento corresponde à busca ou ao filtro.' : 'Nenhum lançamento ainda. Toque em + para adicionar.'}</div>`;
     return;
   }
-  el.innerHTML = list.map(t=>{
+  const totalPages = Math.max(1, Math.ceil(list.length/TX_PER_PAGE));
+  txPage = Math.min(Math.max(1,txPage),totalPages);
+  const startIndex = (txPage-1)*TX_PER_PAGE;
+  const visibleTransactions = list.slice(startIndex,startIndex+TX_PER_PAGE);
+  resultsInfo.innerHTML = `<span>Mostrando <strong>${startIndex+1}–${Math.min(startIndex+TX_PER_PAGE,list.length)}</strong> de <strong>${list.length}</strong></span><span>10 por página</span>`;
+  pagination.innerHTML = list.length>TX_PER_PAGE ? `
+    <button type="button" class="bill-page-btn" id="txPagePrev" ${txPage===1?'disabled':''}>‹ Anterior</button>
+    <span class="bill-page-label">${txPage} de ${totalPages}</span>
+    <button type="button" class="bill-page-btn" id="txPageNext" ${txPage===totalPages?'disabled':''}>Próxima ›</button>
+  ` : '';
+  el.innerHTML = visibleTransactions.map(t=>{
     const st = stores.find(s=>s.id===t.storeId);
     const d = new Date(t.date+'T00:00:00');
     const dateStr = d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
@@ -1626,6 +1675,16 @@ function renderTxList(){
       const synced = legacyDeleted && rowDeleted;
       toast(synced ? 'Lançamento excluído' : 'Excluído neste aparelho; sincronização pendente');
     };
+  });
+  document.getElementById('txPagePrev')?.addEventListener('click',()=>{
+    txPage--;
+    renderTxList();
+    document.getElementById('txTitle').scrollIntoView({behavior:'smooth',block:'start'});
+  });
+  document.getElementById('txPageNext')?.addEventListener('click',()=>{
+    txPage++;
+    renderTxList();
+    document.getElementById('txTitle').scrollIntoView({behavior:'smooth',block:'start'});
   });
 }
 
@@ -2254,6 +2313,16 @@ document.getElementById('billStatusFilter').addEventListener('change',event=>{
   billPage = 1;
   renderBillPanel();
 });
+document.getElementById('txSearch').addEventListener('input',event=>{
+  txSearch = event.target.value;
+  txPage = 1;
+  renderTxList();
+});
+document.getElementById('txTypeFilter').addEventListener('change',event=>{
+  txTypeFilter = event.target.value;
+  txPage = 1;
+  renderTxList();
+});
 document.getElementById('periodPrev').onclick = ()=>{
   billPage = 1;
   if(periodMode==='month') periodDate.setMonth(periodDate.getMonth()-1);
@@ -2304,6 +2373,7 @@ document.getElementById('btnSave').onclick = async ()=>{
     storeId, type: formType, category, description, value, date
   };
   transactions.push(tx);
+  txPage = 1;
   closeModal();
   render();
   const saved = saveTransactions();

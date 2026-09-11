@@ -1,4 +1,4 @@
-const CACHE_NAME = 'central-caixa-v28';
+const CACHE_NAME = 'central-caixa-v29';
 const APP_SHELL = [
   './',
   './index.html',
