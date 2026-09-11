@@ -20,7 +20,7 @@ function vals(k,r){if(k==='exames')return [`<b>${r.name}</b><small>${r.phone||''
 </script><script>
 const cfg=window.OTICA_CONFIG||{},db=window.supabase?.createClient(cfg.supabaseUrl,cfg.supabasePublishableKey);
 const themeButton=document.createElement('button');themeButton.className='btn theme-toggle';themeButton.type='button';function paintThemeButton(){const dark=document.documentElement.classList.contains('dark');themeButton.textContent=dark?'☀':'☾';themeButton.title=dark?'Usar tema claro':'Usar tema escuro';themeButton.setAttribute('aria-label',themeButton.title)}paintThemeButton();document.querySelector('.top>div:last-child').prepend(themeButton);themeButton.onclick=()=>{document.documentElement.classList.toggle('dark');localStorage.setItem('otica-theme',document.documentElement.classList.contains('dark')?'dark':'light');paintThemeButton()};
-const refreshButton=document.createElement('button');refreshButton.className='btn';refreshButton.type='button';refreshButton.textContent='⟳ Atualizar';refreshButton.title='Buscar os dados mais recentes';document.querySelector('.top>div:last-child').prepend(refreshButton);refreshButton.onclick=async()=>{if(refreshButton.disabled)return;refreshButton.disabled=true;refreshButton.textContent='⟳ Atualizando…';try{const ok=await Promise.race([loadCloud(),new Promise((_,reject)=>setTimeout(()=>reject(new Error('A atualização demorou demais.')),10000))]);if(!ok)throw new Error('Não foi possível buscar os dados.');await updateRole();if(current==='usuarios')await loadUsers();refreshButton.textContent='✓ Atualizado';toast.textContent='Dados atualizados com sucesso.';toast.classList.add('on');setTimeout(()=>toast.classList.remove('on'),2200)}catch(error){refreshButton.textContent='Tentar novamente';toast.textContent=error?.message||'Não foi possível atualizar.';toast.classList.add('on');setTimeout(()=>toast.classList.remove('on'),3500)}finally{setTimeout(()=>{refreshButton.disabled=false;refreshButton.textContent='⟳ Atualizar'},1600)}};
+const refreshButton=document.createElement('button');refreshButton.className='btn';refreshButton.type='button';refreshButton.textContent='⟳ Atualizar';refreshButton.title='Buscar os dados mais recentes';document.querySelector('.top>div:last-child').prepend(refreshButton);refreshButton.onclick=async()=>{if(refreshButton.disabled)return;refreshButton.disabled=true;refreshButton.textContent='⟳ Atualizando…';try{await startRealtime();const ok=await Promise.race([loadCloud(),new Promise((_,reject)=>setTimeout(()=>reject(new Error('A atualização demorou demais.')),10000))]);if(!ok)throw new Error('Não foi possível buscar os dados.');await updateRole();if(current==='usuarios')await loadUsers();refreshButton.textContent='✓ Atualizado';toast.textContent='Conexão ao vivo e dados atualizados.';toast.classList.add('on');setTimeout(()=>toast.classList.remove('on'),2200)}catch(error){refreshButton.textContent='Tentar novamente';toast.textContent=error?.message||'Não foi possível atualizar.';toast.classList.add('on');setTimeout(()=>toast.classList.remove('on'),3500)}finally{setTimeout(()=>{refreshButton.disabled=false;refreshButton.textContent='⟳ Atualizar'},1600)}};
 sections.usuarios={t:'Usuários',d:'Acessos autorizados ao painel da ótica.',c:['Usuário','Perfil','Situação'],s:['Ativo'],f:[['E-mail do usuário','email','email'],['Senha inicial','password','password'],['Perfil','role','select','Funcionário|Administrador']]};data.usuarios=[];
 sections.exames={t:'Exames',d:'Agendamentos organizados por terça-feira, quinta-feira e sábado.',c:['Paciente','Telefone','Data e horário','Tipo','Status'],s:['Confirmado','Pendente','Concluído'],f:[['Paciente','name','text'],['Telefone do agendamento','phone','tel'],['Data e horário','date','datetime-local'],['Tipo','type','select','Exame de vista|Retorno|Primeira consulta'],['Status','status','select','Confirmado|Pendente|Concluído']]};
 function examDay(value){const parts=String(value||'').split('T')[0].split('-').map(Number);return parts.length===3?new Date(parts[0],parts[1]-1,parts[2]).getDay():-1}function examDateTime(value){if(!value)return'—';const [date,time='']=String(value).split('T'),[year,month,day]=date.split('-');return `${day}/${month}/${year}${time?', '+time.slice(0,5):''}`}
@@ -31,7 +31,7 @@ const originalOpen=open;open=function(k=current==='inicio'?'exames':current){del
 function editRecord(id){const item=(data[current]||[]).find(r=>r._id===id);if(!item)return;originalOpen(current);recordForm.dataset.editId=id;modalTitle.textContent='Editar · '+sections[current].t;Object.entries(item).forEach(([key,value])=>{const input=recordForm.elements.namedItem(key);if(input&&key!=='_id')input.value=value??''})}
 async function deleteRecord(id,name){if(!id||!confirm(`Excluir ${name}? Esta ação não pode ser desfeita.`))return;const module=current,{data:deleted,error}=await db.from('records').delete().eq('id',id).eq('module',module).select('id').maybeSingle();if(error||!deleted){toast.textContent='Não foi possível excluir: '+(error?.message||'o banco não confirmou a exclusão');toast.classList.add('on');setTimeout(()=>toast.classList.remove('on'),3500);return}data[module]=data[module].filter(item=>item._id!==id);localStorage.setItem('otica-data',JSON.stringify(data));render();await loadCloud();toast.textContent='Registro excluído definitivamente.';toast.classList.add('on');setTimeout(()=>toast.classList.remove('on'),2200)}
 async function deleteUser(id,name){if(!id||!confirm(`Excluir o acesso de ${name}? Esta pessoa não conseguirá mais entrar.`))return;const {data:result,error}=await db.functions.invoke('manage-users',{body:{action:'delete',userId:id}});if(error||result?.error){toast.textContent=result?.error||'Não foi possível excluir o usuário.';toast.classList.add('on');setTimeout(()=>toast.classList.remove('on'),3500);return}await loadUsers();toast.textContent='Acesso excluído.';toast.classList.add('on');setTimeout(()=>toast.classList.remove('on'),2200)}
-tbody.addEventListener('click',e=>{const edit=e.target.closest('[data-edit]'),remove=e.target.closest('[data-delete]'),removeUser=e.target.closest('[data-delete-user]');if(edit)editRecord(edit.dataset.edit);if(remove)deleteRecord(remove.dataset.delete,remove.dataset.name);if(removeUser)deleteUser(removeUser.dataset.deleteUser,removeUser.dataset.name)});
+tbody.addEventListener('click',e=>{const edit=e.target.closest('[data-edit]'),remove=e.target.closest('[data-delete]'),removeUser=e.target.closest('[data-delete-user]');if(edit)editRecord(edit.dataset.edit);if(remove)deleteRecord(remove.dataset.delete,remove.dataset.name,remove);if(removeUser)deleteUser(removeUser.dataset.deleteUser,removeUser.dataset.name)});
 async function updateRole(){const {data:member}=await db.from('team_members').select('role').maybeSingle();if(!member)return;const labels={owner:'Proprietário',admin:'Administrador',member:'Funcionário'};document.querySelector('.profile').innerHTML='● &nbsp; '+labels[member.role]+'<br>Unidade principal';if(['owner','admin'].includes(member.role)&&!document.getElementById('usersNav')){const button=document.createElement('button');button.id='usersNav';button.dataset.id='usuarios';button.textContent='⚙  Usuários';button.onclick=()=>show('usuarios');nav.appendChild(button)}}
 async function loadUsers(){tbody.innerHTML='<tr><td colspan="3" class="empty">Carregando usuários…</td></tr>';const {data:result,error}=await db.functions.invoke('manage-users',{body:{action:'list'}});if(error||result?.error){tbody.innerHTML=`<tr><td colspan="3" class="empty">${result?.error||'Não foi possível carregar os usuários.'}</td></tr>`;return}data.usuarios=result.users||[];render()}
 async function loadCloud(){const {data:rows,error}=await db.from('records').select('id,module,payload').order('created_at',{ascending:false});if(error){authStatus.textContent='Não foi possível carregar a base: '+error.message;return false}Object.keys(sections).forEach(k=>data[k]=[]);rows.forEach(r=>data[r.module].push({...r.payload,_id:r.id}));localStorage.setItem('otica-data',JSON.stringify(data));authGate.classList.add('hidden');if(current!=='inicio')render();return true}
@@ -46,7 +46,7 @@ let recordsChannel;function startRealtime(){if(!db)return;if(recordsChannel)db.r
 </script>
 <script>
 // Sincronização confiável: o banco é a fonte de verdade e respostas antigas são descartadas.
-let cloudReadSerial=0,cloudRefreshTimer=null,recordMutationPending=false,realtimeStartPromise=Promise.resolve();
+let cloudReadSerial=0,cloudRefreshTimer=null,recordMutationPending=false,realtimeStartPromise=Promise.resolve(),realtimeGeneration=0,realtimeRestartTimer=null,resumeSyncTimer=null;
 const recordModules=Object.keys(sections).filter(module=>module!=='usuarios');
 
 function persistRecords(){
@@ -158,14 +158,19 @@ recordForm.onsubmit=async e=>{
   }
 };
 
-deleteRecord=async function(id,name){
+deleteRecord=async function(id,name,button){
   if(!id||recordMutationPending||!confirm(`Excluir ${name}? Esta ação não pode ser desfeita.`))return;
   recordMutationPending=true;
   const module=current;
+  const previousLabel=button?.textContent;
+  if(button){button.disabled=true;button.textContent='Excluindo…';}
   try{
-    const {data:deleted,error}=await db.from('records').delete().eq('id',id).eq('module',module).select('id').maybeSingle();
-    if(error||!deleted)throw new Error(error?.message||'o banco não confirmou a exclusão');
-    console.info('[sync] exclusão confirmada',{module});
+    const {error,count}=await db.from('records').delete({count:'exact'}).eq('id',id).eq('module',module);
+    if(error)throw error;
+    const {data:remaining,error:verifyError}=await db.from('records').select('id').eq('id',id).eq('module',module).maybeSingle();
+    if(verifyError)throw verifyError;
+    if(remaining)throw new Error('o registro ainda está presente no banco');
+    console.info('[sync] exclusão confirmada e verificada',{module,count});
     removeLocalRecord(id);
     const synchronized=await loadCloud();
     showToast(synchronized?'Registro excluído e sincronizado.':'Registro excluído do banco. Toque em Atualizar para sincronizar.',synchronized?2200:4000);
@@ -174,30 +179,58 @@ deleteRecord=async function(id,name){
     showToast('Não foi possível excluir: '+(error?.message||'erro desconhecido'),4000);
   }finally{
     recordMutationPending=false;
+    if(button?.isConnected){button.disabled=false;button.textContent=previousLabel||'Excluir';}
   }
 };
 
 startRealtime=function(){
-  realtimeStartPromise=realtimeStartPromise.then(async()=>{
+  const generation=++realtimeGeneration;
+  realtimeStartPromise=realtimeStartPromise.catch(error=>console.warn('[sync] reiniciando após falha',error)).then(async()=>{
     if(!db)return;
+    const {data:{session}}=await db.auth.getSession();
+    if(!session)return;
+    db.realtime.setAuth(session.access_token);
     if(recordsChannel){
       await db.removeChannel(recordsChannel);
       recordsChannel=null;
     }
-    recordsChannel=db.channel('records-live-v2')
+    if(generation!==realtimeGeneration)return;
+    const channel=db.channel(`records-live-v3-${generation}`)
       .on('postgres_changes',{event:'*',schema:'public',table:'records'},change=>{
+        if(generation!==realtimeGeneration)return;
         if(change.eventType==='DELETE')removeLocalRecord(change.old?.id);
         else upsertLocalRecord(change.new);
         scheduleCloudRefresh(350);
       })
       .subscribe(status=>{
+        if(generation!==realtimeGeneration)return;
         console.info('[sync] tempo real',status);
-        if(status==='SUBSCRIBED')scheduleCloudRefresh(0);
-        if(['CHANNEL_ERROR','TIMED_OUT','CLOSED'].includes(status))scheduleCloudRefresh(800);
+        if(status==='SUBSCRIBED'){
+          clearTimeout(realtimeRestartTimer);
+          scheduleCloudRefresh(0);
+        }
+        if(['CHANNEL_ERROR','TIMED_OUT'].includes(status)){
+          clearTimeout(realtimeRestartTimer);
+          realtimeRestartTimer=setTimeout(()=>startRealtime(),1200);
+        }
       });
+    recordsChannel=channel;
   });
   return realtimeStartPromise;
 };
+
+function resumeLiveSync(){
+  if(!db||!authGate.classList.contains('hidden'))return;
+  clearTimeout(resumeSyncTimer);
+  resumeSyncTimer=setTimeout(async()=>{
+    try{
+      await startRealtime();
+      await loadCloud();
+    }catch(error){
+      console.error('[sync] falha ao retomar conexão',error?.message||error);
+    }
+  },150);
+}
 
 startCloud=async function(){
   if(!db){authStatus.textContent='Configuração do banco incompleta.';return;}
@@ -208,16 +241,16 @@ startCloud=async function(){
   await updateRole();
 };
 
-addEventListener('online',()=>scheduleCloudRefresh(0));
-addEventListener('focus',()=>scheduleCloudRefresh(0));
+addEventListener('online',resumeLiveSync);
+addEventListener('focus',resumeLiveSync);
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='visible')scheduleCloudRefresh(0);
+  if(document.visibilityState==='visible')resumeLiveSync();
 });
 
 startCloud();
 </script>
 <style>
-#periodFilter[hidden]{display:none}.filter-count{color:var(--muted);font-size:13px;align-self:center;white-space:nowrap}
+#periodFilter[hidden]{display:none}.filter-count{color:var(--muted);font-size:13px;align-self:center;white-space:nowrap}button:disabled{cursor:wait;opacity:.62}#signupBtn{display:none}.auth-actions{grid-template-columns:1fr}
 @media(max-width:680px){#periodFilter{flex:1;min-width:145px}.filter-count{width:100%;padding-left:2px}}
 </style>
 <script>
