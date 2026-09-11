@@ -43,4 +43,175 @@ recordForm.onsubmit=async e=>{e.preventDefault();let payload=Object.fromEntries(
 const createSubmit=recordForm.onsubmit;recordForm.onsubmit=async e=>{const id=recordForm.dataset.editId;if(!id)return createSubmit(e);e.preventDefault();const payload=Object.fromEntries(new FormData(recordForm));const {data:saved,error}=await db.from('records').update({payload,updated_at:new Date().toISOString()}).eq('id',id).select('id').single();if(error||!saved){toast.textContent='Não foi possível atualizar: '+(error?.message||'registro não confirmado');toast.classList.add('on');setTimeout(()=>toast.classList.remove('on'),3500);return}delete recordForm.dataset.editId;shut();await loadCloud();toast.textContent='Alterações confirmadas no banco e sincronizadas.';toast.classList.add('on');setTimeout(()=>toast.classList.remove('on'),2200)};
 document.querySelector('.profile').style.cursor='pointer';document.querySelector('.profile').title='Clique para sair';document.querySelector('.profile').onclick=async()=>{await db.auth.signOut();authGate.classList.remove('hidden')};
 let recordsChannel;function startRealtime(){if(!db)return;if(recordsChannel)db.removeChannel(recordsChannel);recordsChannel=db.channel('records-live').on('postgres_changes',{event:'*',schema:'public',table:'records'},()=>loadCloud()).subscribe()}db?.auth.onAuthStateChange((event,session)=>{if(session&&['INITIAL_SESSION','SIGNED_IN','TOKEN_REFRESHED'].includes(event))setTimeout(async()=>{await loadCloud();startRealtime();await updateRole()},0)});startCloud().then(updateRole);
+</script>
+<script>
+// Sincronização confiável: o banco é a fonte de verdade e respostas antigas são descartadas.
+let cloudReadSerial=0,cloudRefreshTimer=null,recordMutationPending=false,realtimeStartPromise=Promise.resolve();
+const recordModules=Object.keys(sections).filter(module=>module!=='usuarios');
+
+function persistRecords(){
+  localStorage.setItem('otica-data',JSON.stringify(data));
+  if(current!=='inicio')render();
+}
+
+function removeLocalRecord(id){
+  recordModules.forEach(module=>{
+    data[module]=(data[module]||[]).filter(item=>item._id!==id);
+  });
+  persistRecords();
+}
+
+function upsertLocalRecord(row){
+  if(!row?.id||!recordModules.includes(row.module))return;
+  recordModules.forEach(module=>{
+    data[module]=(data[module]||[]).filter(item=>item._id!==row.id);
+  });
+  data[row.module].unshift({...row.payload,_id:row.id});
+  persistRecords();
+}
+
+loadCloud=async function(){
+  const requestId=++cloudReadSerial;
+  const {data:rows,error}=await db.from('records').select('id,module,payload').order('created_at',{ascending:false});
+  if(error){
+    console.error('[sync] falha ao carregar registros',error.message);
+    authStatus.textContent='Não foi possível carregar a base: '+error.message;
+    return false;
+  }
+  if(requestId!==cloudReadSerial){
+    console.info('[sync] resposta antiga descartada',{requestId,currentRequest:cloudReadSerial});
+    return true;
+  }
+  const next={...data};
+  recordModules.forEach(module=>next[module]=[]);
+  rows.forEach(row=>{
+    if(recordModules.includes(row.module))next[row.module].push({...row.payload,_id:row.id});
+  });
+  data=next;
+  localStorage.setItem('otica-data',JSON.stringify(data));
+  authStatus.textContent='';
+  authGate.classList.add('hidden');
+  if(current!=='inicio')render();
+  console.info('[sync] base atualizada',{records:rows.length});
+  return true;
+};
+
+function scheduleCloudRefresh(delay=180){
+  if(!db||!authGate.classList.contains('hidden'))return;
+  clearTimeout(cloudRefreshTimer);
+  cloudRefreshTimer=setTimeout(()=>loadCloud(),delay);
+}
+
+function showToast(message,duration=2200){
+  toast.textContent=message;
+  toast.classList.add('on');
+  setTimeout(()=>toast.classList.remove('on'),duration);
+}
+
+function setFormBusy(busy){
+  const button=recordForm.querySelector('button[type="submit"]');
+  if(!button)return;
+  button.disabled=busy;
+  button.textContent=busy?'Salvando…':'Salvar cadastro';
+}
+
+shut=function(){
+  modal.classList.remove('on');
+  recordForm.reset();
+  delete recordForm.dataset.editId;
+};
+
+recordForm.onsubmit=async e=>{
+  e.preventDefault();
+  if(recordMutationPending)return;
+  recordMutationPending=true;
+  setFormBusy(true);
+  const module=current,id=recordForm.dataset.editId;
+  let payload=Object.fromEntries(new FormData(recordForm));
+  try{
+    if(module==='usuarios'){
+      payload.role=payload.role==='Administrador'?'admin':'member';
+      const {data:result,error}=await db.functions.invoke('manage-users',{body:{action:'create',...payload}});
+      if(error||result?.error)throw new Error(result?.error||error?.message||'Não foi possível criar o usuário.');
+      shut();
+      await loadUsers();
+      showToast('Usuário criado e liberado.');
+      return;
+    }
+    const query=id
+      ?db.from('records').update({payload,updated_at:new Date().toISOString()}).eq('id',id).eq('module',module)
+      :db.from('records').insert({module,payload});
+    const {data:saved,error}=await query.select('id,module,payload').single();
+    if(error||!saved)throw new Error(error?.message||'o banco não confirmou a alteração');
+    console.info('[sync] alteração confirmada',{action:id?'update':'insert',module});
+    upsertLocalRecord(saved);
+    shut();
+    const synchronized=await loadCloud();
+    showToast(synchronized?(id?'Alterações salvas e sincronizadas.':'Cadastro salvo e sincronizado.'):'Alteração salva no banco. Toque em Atualizar para sincronizar.',synchronized?2200:4000);
+  }catch(error){
+    console.error('[sync] falha ao salvar',error?.message||error);
+    showToast('Não foi possível salvar: '+(error?.message||'erro desconhecido'),4000);
+  }finally{
+    recordMutationPending=false;
+    setFormBusy(false);
+  }
+};
+
+deleteRecord=async function(id,name){
+  if(!id||recordMutationPending||!confirm(`Excluir ${name}? Esta ação não pode ser desfeita.`))return;
+  recordMutationPending=true;
+  const module=current;
+  try{
+    const {data:deleted,error}=await db.from('records').delete().eq('id',id).eq('module',module).select('id').maybeSingle();
+    if(error||!deleted)throw new Error(error?.message||'o banco não confirmou a exclusão');
+    console.info('[sync] exclusão confirmada',{module});
+    removeLocalRecord(id);
+    const synchronized=await loadCloud();
+    showToast(synchronized?'Registro excluído e sincronizado.':'Registro excluído do banco. Toque em Atualizar para sincronizar.',synchronized?2200:4000);
+  }catch(error){
+    console.error('[sync] falha ao excluir',error?.message||error);
+    showToast('Não foi possível excluir: '+(error?.message||'erro desconhecido'),4000);
+  }finally{
+    recordMutationPending=false;
+  }
+};
+
+startRealtime=function(){
+  realtimeStartPromise=realtimeStartPromise.then(async()=>{
+    if(!db)return;
+    if(recordsChannel){
+      await db.removeChannel(recordsChannel);
+      recordsChannel=null;
+    }
+    recordsChannel=db.channel('records-live-v2')
+      .on('postgres_changes',{event:'*',schema:'public',table:'records'},change=>{
+        if(change.eventType==='DELETE')removeLocalRecord(change.old?.id);
+        else upsertLocalRecord(change.new);
+        scheduleCloudRefresh(350);
+      })
+      .subscribe(status=>{
+        console.info('[sync] tempo real',status);
+        if(status==='SUBSCRIBED')scheduleCloudRefresh(0);
+        if(['CHANNEL_ERROR','TIMED_OUT','CLOSED'].includes(status))scheduleCloudRefresh(800);
+      });
+  });
+  return realtimeStartPromise;
+};
+
+startCloud=async function(){
+  if(!db){authStatus.textContent='Configuração do banco incompleta.';return;}
+  const {data:{session}}=await db.auth.getSession();
+  if(!session){authGate.classList.remove('hidden');return;}
+  await loadCloud();
+  await startRealtime();
+  await updateRole();
+};
+
+addEventListener('online',()=>scheduleCloudRefresh(0));
+addEventListener('focus',()=>scheduleCloudRefresh(0));
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible')scheduleCloudRefresh(0);
+});
+
+startCloud();
 </script></body></html>
