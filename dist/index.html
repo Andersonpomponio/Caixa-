@@ -292,7 +292,12 @@ const filterCount=document.createElement('span');
 filterCount.className='filter-count';
 filterCount.setAttribute('aria-live','polite');
 periodFilter.insertAdjacentElement('afterend',filterCount);
-const periodModules=new Set(['exames','leads-otica']);
+const rankingPanel=document.createElement('section');
+rankingPanel.id='salesRanking';
+rankingPanel.className='ranking-panel';
+rankingPanel.hidden=true;
+document.querySelector('.tools').insertAdjacentElement('afterend',rankingPanel);
+const periodModules=new Set(['exames','leads-otica','comissoes']);
 
 sections['leads-otica'].c=['Contato','Cadastro','Telefone','Interesse','Origem','Status'];
 
@@ -342,11 +347,35 @@ function safeValues(module,record){
   return [safeText(record.name),module==='pastores'?safeText(record.owner):safeText(displayDate(record.date)),safeText((record.type||0)+'x'),safeText(money(record.value)),safeTag(record.status)];
 }
 
+function renderSalesRanking(records,period){
+  if(current!=='comissoes'){
+    rankingPanel.hidden=true;
+    rankingPanel.innerHTML='';
+    return;
+  }
+  const totals=new Map();
+  records.forEach(record=>{
+    const name=String(record.name||'').trim()||'Vendedor não informado';
+    const key=name.toLocaleLowerCase('pt-BR');
+    const currentTotal=totals.get(key)||{name,total:0,sales:0};
+    currentTotal.total+=Number(record.value)||0;
+    currentTotal.sales+=1;
+    totals.set(key,currentTotal);
+  });
+  const ranking=[...totals.values()].sort((a,b)=>b.total-a.total||a.name.localeCompare(b.name,'pt-BR'));
+  const periodLabel=period==='month'?'este mês':'esta semana';
+  rankingPanel.hidden=false;
+  rankingPanel.innerHTML=`<div class="ranking-head"><div><span class="eyebrow">Desempenho</span><h3>Ranking de vendedores</h3></div><span class="ranking-period">${periodLabel}</span></div>${ranking.length?`<div class="ranking-list">${ranking.map((seller,index)=>`<div class="ranking-item"><span class="ranking-position">${index+1}º</span><div><b>${safeText(seller.name)}</b><small>${seller.sales} ${seller.sales===1?'venda':'vendas'}</small></div><strong>${safeText(money(seller.total))}</strong></div>`).join('')}</div>`:'<div class="ranking-empty">Nenhuma venda registrada neste período.</div>'}`;
+}
+
 function updatePeriodVisibility(){
   const active=periodModules.has(current);
+  periodFilter.options[0].hidden=current==='comissoes';
+  periodFilter.options[0].disabled=current==='comissoes';
   periodFilter.hidden=!active;
   filterCount.hidden=!active;
-  if(!active)periodFilter.value='';
+  if(current==='comissoes'&&!['week','month'].includes(periodFilter.value))periodFilter.value='week';
+  else if(!active)periodFilter.value='';
 }
 
 render=function(){
@@ -363,6 +392,7 @@ render=function(){
   filter.innerHTML='<option value="">Todos os status</option>'+section.s.map(value=>`<option ${value===status?'selected':''}>${safeText(value)}</option>`).join('');
   const records=(data[current]||[]).filter(record=>(!status||record.status===status)&&(!term||Object.values(record).join(' ').toLocaleLowerCase('pt-BR').includes(term))&&matchesPeriod(record,period));
   filterCount.textContent=`${records.length} ${records.length===1?'resultado':'resultados'}`;
+  renderSalesRanking(records,period);
   const row=record=>{
     const id=safeText(record._id||record.id||''),name=safeText(record.name||record.email||'este registro');
     const actions=current==='usuarios'?(record.role==='owner'?'<span class="tag">Conta principal</span>':`<button type="button" class="btn" style="color:var(--red)" data-delete-user="${id}" data-name="${name}">Excluir acesso</button>`):`<button type="button" class="btn" data-edit="${id}">Editar</button> <button type="button" class="btn" style="color:var(--red)" data-delete="${id}" data-name="${name}">Excluir</button>`;
@@ -398,11 +428,12 @@ document.querySelector('.profile').onclick=async()=>{
 updatePeriodVisibility();
 </script>
 <style>
+.ranking-panel[hidden]{display:none}.ranking-panel{margin:0 0 15px;padding:20px;border:1px solid var(--line);border-radius:19px;background:var(--card);box-shadow:var(--shadow)}.ranking-head{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:13px}.ranking-head h3{margin:4px 0 0;font-size:20px}.ranking-period{padding:7px 11px;border-radius:99px;background:var(--soft);color:var(--green);font-size:12px;font-weight:850}.ranking-list{display:grid;gap:7px}.ranking-item{display:grid;grid-template-columns:46px minmax(0,1fr) auto;gap:11px;align-items:center;padding:11px 12px;border:1px solid var(--line);border-radius:13px;background:var(--paper)}.ranking-position{display:grid;place-items:center;width:36px;height:36px;border-radius:11px;background:var(--soft);color:var(--green);font-weight:900}.ranking-item:first-child .ranking-position{background:var(--gold);color:#17231d}.ranking-item b{font-size:14px}.ranking-item small{display:block;margin-top:3px;color:var(--muted);font-size:12px}.ranking-item strong{font-size:15px;white-space:nowrap}.ranking-empty{padding:24px;text-align:center;color:var(--muted)}
 @media(max-width:680px){
   html{font-size:16px}body{overflow-x:hidden;-webkit-text-size-adjust:100%}.app{min-width:0}.side{left:0;right:0;bottom:0;width:100%;padding:7px 7px calc(7px + env(safe-area-inset-bottom));overflow:hidden}.nav{display:flex;gap:5px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity;scrollbar-width:none}.nav::-webkit-scrollbar{display:none}.nav button{flex:0 0 76px;min-height:54px;padding:8px 4px;font-size:11px;line-height:1.15;scroll-snap-align:start;white-space:normal}.nav button.on:after{bottom:3px}
   main{min-width:0;padding:18px 12px calc(82px + env(safe-area-inset-bottom))}.top{display:grid;align-items:start;gap:14px;margin-bottom:20px}.top h1{font-size:clamp(27px,9vw,34px)}.top>div:last-child{display:grid;grid-template-columns:minmax(0,1fr) 44px minmax(0,1fr);gap:7px;width:100%}.top .btn{display:flex!important;align-items:center;justify-content:center;min-width:0;min-height:44px;padding:8px 7px;font-size:12px;white-space:nowrap}.top .theme-toggle{min-width:44px;font-size:18px}
   .hero{padding:20px;border-radius:19px}.hero h2{font-size:23px}.hero p{font-size:14px}.stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.stat{min-width:0;padding:14px}.stat small{font-size:12px}.stat strong{font-size:21px;overflow-wrap:anywhere}.panel{padding:17px;border-radius:17px}.quick{grid-template-columns:1fr 1fr}.quick button{min-height:52px;padding:12px;font-size:13px}
-  .page-head{align-items:flex-end;gap:9px}.page-head>div{min-width:0}.page-head h2{font-size:25px}.page-head .btn{flex:0 0 auto;min-height:44px;padding:9px 12px}.tools{display:grid;grid-template-columns:1fr 1fr;gap:8px}.tools input{grid-column:1/-1;width:100%;min-width:0}.tools select{width:100%;min-width:0;padding:10px;font-size:14px}.filter-count{grid-column:1/-1;width:100%;padding-left:2px}
+  .page-head{align-items:flex-end;gap:9px}.page-head>div{min-width:0}.page-head h2{font-size:25px}.page-head .btn{flex:0 0 auto;min-height:44px;padding:9px 12px}.tools{display:grid;grid-template-columns:1fr 1fr;gap:8px}.tools input{grid-column:1/-1;width:100%;min-width:0}.tools select{width:100%;min-width:0;padding:10px;font-size:14px}.filter-count{grid-column:1/-1;width:100%;padding-left:2px}.ranking-panel{padding:15px;border-radius:16px}.ranking-head{align-items:flex-start}.ranking-head h3{font-size:18px}.ranking-item{grid-template-columns:42px minmax(0,1fr);padding:10px}.ranking-item strong{grid-column:2;white-space:normal}.ranking-period{font-size:11px}
   .table{overflow:visible;border:0;background:transparent!important;box-shadow:none}table{min-width:0}thead{display:none}table,tbody{display:block;width:100%}tbody{display:grid;gap:10px}tbody tr:not(.day-group){display:block;overflow:hidden;border:1px solid var(--line);border-radius:16px;background:var(--card);box-shadow:0 8px 24px rgba(18,54,57,.07)}tbody tr:not(.day-group) td{display:grid;grid-template-columns:minmax(88px,34%) minmax(0,1fr);gap:10px;align-items:center;width:100%;min-height:44px;padding:11px 13px;border-top:1px solid var(--line);background:transparent!important;color:var(--ink)!important;overflow-wrap:anywhere}tbody tr:not(.day-group) td:first-child{border-top:0}tbody tr:not(.day-group) td::before{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:800}tbody tr:not(.day-group) td.empty{display:block;padding:28px 16px;text-align:center}tbody tr:not(.day-group) td.empty::before{display:none}.record-actions{display:flex!important;justify-content:flex-end;gap:7px;white-space:normal!important}.record-actions::before{margin-right:auto}.record-actions .btn{min-height:42px;padding:8px 11px;font-size:13px;touch-action:manipulation}.day-group{display:block}.day-group td{display:block!important;width:100%;padding:11px 12px;border-top:0;border-radius:12px}.day-group td::before{display:none}.day-count{margin-left:8px}
   .modal-bg{align-items:end;padding:0}.modal{width:100%;max-height:92dvh;overflow-y:auto;border-radius:22px 22px 0 0;padding:21px 16px calc(18px + env(safe-area-inset-bottom))}.modal h2{font-size:22px}.form{gap:12px}.field input,.field select,.auth-card input{min-height:48px;font-size:16px}.modal-actions .btn{min-height:46px}.auth{padding:14px}.auth-card{padding:24px 18px;border-radius:20px}.auth-card h2{font-size:27px}.confirm-bg{align-items:end;padding:0}.confirm-card{width:100%;border-radius:22px 22px 0 0;padding:22px 16px calc(18px + env(safe-area-inset-bottom))}.confirm-actions{grid-template-columns:1fr}.confirm-actions .btn{min-height:48px}.toast{left:12px;right:12px;bottom:calc(76px + env(safe-area-inset-bottom));font-size:14px}
 }
