@@ -141,11 +141,11 @@
   .chart-empty{min-height:220px;display:grid;place-items:center;text-align:center;color:var(--ink-soft);font-size:13px;}
 
   /* transactions */
-  .tx-tools{display:grid;grid-template-columns:minmax(0,1fr) 148px;gap:8px;margin:-3px 0 10px;}
-  .tx-search,.tx-type-filter{width:100%;min-height:42px;border:1px solid var(--line);border-radius:11px;background:var(--surface-2);color:var(--ink);font:inherit;font-size:13px;}
+  .tx-tools{display:grid;grid-template-columns:minmax(0,1fr) 132px 148px;gap:8px;margin:-3px 0 10px;}
+  .tx-search,.tx-type-filter,.tx-period-filter{width:100%;min-height:42px;border:1px solid var(--line);border-radius:11px;background:var(--surface-2);color:var(--ink);font:inherit;font-size:13px;}
   .tx-search{padding:9px 12px;}
-  .tx-type-filter{padding:9px 30px 9px 10px;}
-  .tx-search:focus,.tx-type-filter:focus{outline:2px solid var(--blue);outline-offset:1px;}
+  .tx-type-filter,.tx-period-filter{padding:9px 30px 9px 10px;}
+  .tx-search:focus,.tx-type-filter:focus,.tx-period-filter:focus{outline:2px solid var(--blue);outline-offset:1px;}
   .tx-results-info{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:2px 1px 8px;color:var(--ink-soft);font-size:11.5px;}
   .tx-results-info strong{color:var(--ink);font-weight:700;}
   .tx-list{display:flex;flex-direction:column;gap:8px;}
@@ -162,7 +162,7 @@
   .tx-val.saida{color:var(--red);}
   .tx-del{background:none;border:none;color:var(--ink-soft);opacity:.5;font-size:16px;cursor:pointer;padding:4px;flex-shrink:0;}
   .tx-pagination{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:12px;}
-  @media(max-width:430px){.tx-tools{grid-template-columns:1fr;}.tx-type-filter{font-size:14px;}.tx-search{font-size:16px;}}
+  @media(max-width:520px){.tx-tools{grid-template-columns:1fr 1fr;}.tx-search{grid-column:1/-1;font-size:16px;}.tx-type-filter,.tx-period-filter{font-size:14px;}}
   .empty{text-align:center;padding:30px 10px;color:var(--ink-soft);font-size:13px;}
 
   /* fab */
@@ -427,6 +427,13 @@
         <option value="all">Todos</option>
         <option value="entrada">Entradas</option>
         <option value="saida">Saídas</option>
+        <option value="boleto">Boletos</option>
+      </select>
+      <select class="tx-period-filter" id="txPeriodFilter" aria-label="Filtrar período dos lançamentos">
+        <option value="day">Hoje</option>
+        <option value="week">Esta semana</option>
+        <option value="month" selected>Este mês</option>
+        <option value="all">Todo o histórico</option>
       </select>
     </div>
     <div class="tx-results-info" id="txResultsInfo"></div>
@@ -556,6 +563,7 @@ let billPage = 1;
 const BILLS_PER_PAGE = 10;
 let txSearch = '';
 let txTypeFilter = 'all';
+let txPeriodFilter = 'month';
 let txPage = 1;
 const TX_PER_PAGE = 10;
 let periodDate = new Date(formatLocalDate(new Date()) + 'T00:00:00');
@@ -1605,22 +1613,45 @@ function renderCashChart(){
   el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Gráfico de entradas, saídas e saldo no período selecionado">${grid}<line x1="${left}" x2="${width-right}" y1="${baseline}" y2="${baseline}" stroke="var(--ink-soft)" stroke-width="1.2"/>${groups}<text x="${left}" y="12" fill="var(--ink-soft)" font-size="10">Entradas e saldo acima de zero · saídas abaixo</text></svg>`;
 }
 
+function isBillTransaction(transaction){
+  const category = String(transaction.category || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+  return transaction.type === 'saida' && category === 'boleto';
+}
+
+function isInTransactionPeriod(dateValue){
+  if(txPeriodFilter === 'all') return true;
+  const todayValue = formatLocalDate(new Date());
+  if(txPeriodFilter === 'day') return dateValue === todayValue;
+  const date = new Date(dateValue + 'T00:00:00');
+  const today = new Date(todayValue + 'T00:00:00');
+  if(txPeriodFilter === 'month'){
+    return date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth();
+  }
+  const weekStart = new Date(today);
+  const day = weekStart.getDay();
+  weekStart.setDate(weekStart.getDate() - (day === 0 ? 6 : day - 1));
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 7);
+  return date >= weekStart && date < weekEnd;
+}
+
 function renderTxList(){
   const title = document.getElementById('txTitle');
   const storeName = activeTab==='all' ? 'todas as unidades' : (stores.find(s=>s.id===activeTab)||{}).name;
   title.textContent = 'Lançamentos — ' + storeName;
 
-  // A lista é o histórico da unidade. Os filtros mensal/semanal ficam nos
-  // totais, gráficos e boletos, para um lançamento nunca parecer apagado
-  // apenas por estar fora do período que está sendo analisado.
   const normalizedSearch = txSearch.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
   const list = (activeTab==='all' ? transactions : transactions.filter(t=>t.storeId===activeTab))
     .filter(t=>{
-      if(txTypeFilter!=='all' && t.type!==txTypeFilter) return false;
+      const isBill = isBillTransaction(t);
+      if(txTypeFilter==='entrada' && t.type!=='entrada') return false;
+      if(txTypeFilter==='saida' && (t.type!=='saida' || isBill)) return false;
+      if(txTypeFilter==='boleto' && !isBill) return false;
+      if(!isInTransactionPeriod(t.date)) return false;
       if(!normalizedSearch) return true;
       const store = stores.find(s=>s.id===t.storeId);
       const searchable = [
-        t.category, t.description, store?.name, t.date, t.type,
+        t.category, t.description, store?.name, t.date, isBill ? 'boleto' : t.type,
         String(t.value), Number(t.value).toLocaleString('pt-BR',{minimumFractionDigits:2})
       ].filter(Boolean).join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
       return searchable.includes(normalizedSearch);
@@ -1631,7 +1662,7 @@ function renderTxList(){
   const resultsInfo = document.getElementById('txResultsInfo');
   const pagination = document.getElementById('txPagination');
   if(list.length===0){
-    const hasFilter = Boolean(normalizedSearch) || txTypeFilter!=='all';
+    const hasFilter = Boolean(normalizedSearch) || txTypeFilter!=='all' || txPeriodFilter!=='all';
     resultsInfo.innerHTML = '<span><strong>0</strong> lançamentos encontrados</span>';
     pagination.innerHTML = '';
     el.innerHTML = `<div class="empty">${hasFilter ? 'Nenhum lançamento corresponde à busca ou ao filtro.' : 'Nenhum lançamento ainda. Toque em + para adicionar.'}</div>`;
@@ -2320,6 +2351,11 @@ document.getElementById('txSearch').addEventListener('input',event=>{
 });
 document.getElementById('txTypeFilter').addEventListener('change',event=>{
   txTypeFilter = event.target.value;
+  txPage = 1;
+  renderTxList();
+});
+document.getElementById('txPeriodFilter').addEventListener('change',event=>{
+  txPeriodFilter = event.target.value;
   txPage = 1;
   renderTxList();
 });
