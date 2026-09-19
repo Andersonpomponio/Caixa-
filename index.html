@@ -810,6 +810,9 @@ async function loadCloudTransactions(){
   const rows = data || [];
   const remoteIds = new Set(rows.map(row=>row.id));
   rows.filter(row=>row.deleted_at).forEach(row=>deletedTransactionIds.add(row.id));
+  const pendingRemoteDeletions = rows
+    .filter(row=>!row.deleted_at && deletedTransactionIds.has(row.id))
+    .map(row=>row.id);
   const pendingLocal = activeTransactions(transactions).filter(item=>!remoteIds.has(item.id));
   const remoteActive = rows
     .filter(row=>!row.deleted_at && !deletedTransactionIds.has(row.id))
@@ -818,7 +821,15 @@ async function loadCloudTransactions(){
   lsSet('deletedTransactionIds', [...deletedTransactionIds]);
   lsSet('transactions', transactions);
   render();
-  return pendingLocal.length ? await upsertCloudTransactions(pendingLocal) : true;
+  const pendingSynced = pendingLocal.length ? await upsertCloudTransactions(pendingLocal) : true;
+  if(!pendingRemoteDeletions.length) return pendingSynced;
+  const {error: deletionError} = await supabaseClient
+    .from('shared_cash_transactions')
+    .update({deleted_at:new Date().toISOString(), updated_at:new Date().toISOString()})
+    .in('id', pendingRemoteDeletions)
+    .is('deleted_at', null);
+  if(deletionError) console.error('[sync] Falha ao concluir exclusões de lançamentos', deletionError);
+  return pendingSynced && !deletionError;
 }
 
 async function upsertCloudBills(items){
@@ -871,7 +882,18 @@ async function loadCloudBills(){
   lsSet('deletedBillIds', [...deletedBillIds]);
   lsSet('bills', bills);
   render();
-  return pendingLocal.length ? await upsertCloudBills(pendingLocal) : true;
+  const pendingSynced = pendingLocal.length ? await upsertCloudBills(pendingLocal) : true;
+  const pendingRemoteDeletions = rows
+    .filter(row=>!row.deleted_at && deletedBillIds.has(row.id))
+    .map(row=>row.id);
+  if(!pendingRemoteDeletions.length) return pendingSynced;
+  const {error: deletionError} = await supabaseClient
+    .from('shared_cash_bills')
+    .update({deleted_at:new Date().toISOString(), updated_at:new Date().toISOString()})
+    .in('id', pendingRemoteDeletions)
+    .is('deleted_at', null);
+  if(deletionError) console.error('[sync] Falha ao concluir exclusões de boletos', deletionError);
+  return pendingSynced && !deletionError;
 }
 
 async function markCloudBillDeleted(id){
@@ -879,7 +901,8 @@ async function markCloudBillDeleted(id){
   const {error} = await supabaseClient
     .from('shared_cash_bills')
     .update({deleted_at:new Date().toISOString(), updated_at:new Date().toISOString()})
-    .eq('id', id);
+    .eq('id', id)
+    .is('deleted_at', null);
   if(error){
     updateSyncUi('A exclusão do boleto ficou salva neste aparelho; sincronização pendente.');
     return false;
@@ -907,7 +930,8 @@ async function markCloudTransactionDeleted(id){
   const {error} = await supabaseClient
     .from('shared_cash_transactions')
     .update({deleted_at:now, updated_at:now})
-    .eq('id', id);
+    .eq('id', id)
+    .is('deleted_at', null);
   if(error){
     updateSyncUi('A exclusão ficou salva neste aparelho; sincronização pendente.');
     return false;
@@ -948,18 +972,12 @@ async function loadTransactionDeletions(){
       .insert(pendingLocal.map(id=>({id})));
     if(insertError && insertError.code !== '23505'){
       updateSyncUi('Algumas exclusões ainda estão aguardando sincronização.');
+      return false;
     }
   }
   lsSet('deletedTransactionIds', [...deletedTransactionIds]);
   transactions = activeTransactions(transactions);
   lsSet('transactions', transactions);
-  if(deletedTransactionIds.size){
-    const now = new Date().toISOString();
-    await supabaseClient
-      .from('shared_cash_transactions')
-      .update({deleted_at:now, updated_at:now})
-      .in('id', [...deletedTransactionIds]);
-  }
   return true;
 }
 
@@ -995,18 +1013,12 @@ async function loadBillDeletions(){
       .insert(pendingLocal.map(id=>({id})));
     if(insertError && insertError.code !== '23505'){
       updateSyncUi('Algumas exclusões de boletos ainda aguardam sincronização.');
+      return false;
     }
   }
   lsSet('deletedBillIds', [...deletedBillIds]);
   bills = activeBills(bills);
   lsSet('bills', bills);
-  if(deletedBillIds.size){
-    const now = new Date().toISOString();
-    await supabaseClient
-      .from('shared_cash_bills')
-      .update({deleted_at:now, updated_at:now})
-      .in('id', [...deletedBillIds]);
-  }
   return true;
 }
 
