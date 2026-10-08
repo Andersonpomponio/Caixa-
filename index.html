@@ -585,7 +585,8 @@ let realtimeStatus = 'CLOSED';
 let localChangeVersion = 0;
 let deletedTransactionIds = new Set();
 let deletedBillIds = new Set();
-const SYNC_POLL_INTERVAL = 10000;
+const APP_VERSION = '32';
+const SYNC_POLL_INTERVAL = 30000;
 const LOGIN_USERS = {
   anderson: {name:'Anderson', email:'anderson@caixacentral.local'},
   luciane: {name:'Luciane', email:'luciane@caixacentral.local'},
@@ -617,6 +618,20 @@ function lsSet(key, value){
 
 function syncPayload(){
   return {stores, transactions, bills};
+}
+
+function syncViewSignature(){
+  const byId = (a,b)=>String(a[0]).localeCompare(String(b[0]));
+  return JSON.stringify({
+    stores: stores.map(item=>[item.id,item.name,item.color]).sort(byId),
+    transactions: transactions.map(item=>[
+      item.id,item.storeId,item.type,item.category,item.description,Number(item.value),item.date
+    ]).sort(byId),
+    bills: bills.map(item=>[
+      item.id,item.storeId,item.category,item.description,Number(item.value),item.dueDate,
+      Boolean(item.paid),item.paidDate || '',item.paymentTransactionId || '',item.updatedAt || ''
+    ]).sort(byId),
+  });
 }
 
 function showLoginGate(message, connected=false){
@@ -709,15 +724,16 @@ function updateSyncUi(message){
   if(!status) return;
   const connected = Boolean(syncUser);
   const person = connected && Object.values(LOGIN_USERS).find(item=>item.email===syncUser.email);
-  status.textContent = message || (connected ? `Sincronizado como ${person ? person.name : 'usuário'}.` : 'Entre como Anderson ou Luciane pela tela inicial.');
+  const statusMessage = message || (connected ? `Sincronizado como ${person ? person.name : 'usuário'}.` : 'Entre como Anderson ou Luciane pela tela inicial.');
+  status.textContent = `${statusMessage} · versão ${APP_VERSION}`;
   signOut.style.display = connected ? 'block' : 'none';
 }
 
-function applyCloudState(data){
+function applyCloudState(data, renderAfter=true){
   if(!data || !Array.isArray(data.stores)) return false;
   stores = data.stores;
   lsSet('stores', stores);
-  render();
+  if(renderAfter) render();
   return true;
 }
 
@@ -820,7 +836,6 @@ async function loadCloudTransactions(){
   transactions = mergeById(remoteActive, pendingLocal);
   lsSet('deletedTransactionIds', [...deletedTransactionIds]);
   lsSet('transactions', transactions);
-  render();
   const pendingSynced = pendingLocal.length ? await upsertCloudTransactions(pendingLocal) : true;
   if(!pendingRemoteDeletions.length) return pendingSynced;
   const {error: deletionError} = await supabaseClient
@@ -881,7 +896,6 @@ async function loadCloudBills(){
   });
   lsSet('deletedBillIds', [...deletedBillIds]);
   lsSet('bills', bills);
-  render();
   const pendingSynced = pendingLocal.length ? await upsertCloudBills(pendingLocal) : true;
   const pendingRemoteDeletions = rows
     .filter(row=>!row.deleted_at && deletedBillIds.has(row.id))
@@ -969,7 +983,7 @@ async function loadTransactionDeletions(){
   if(pendingLocal.length){
     const {error: insertError} = await supabaseClient
       .from('shared_cash_transaction_deletions')
-      .insert(pendingLocal.map(id=>({id})));
+      .upsert(pendingLocal.map(id=>({id})), {onConflict:'id', ignoreDuplicates:true});
     if(insertError && insertError.code !== '23505'){
       updateSyncUi('Algumas exclusões ainda estão aguardando sincronização.');
       return false;
@@ -1010,7 +1024,7 @@ async function loadBillDeletions(){
   if(pendingLocal.length){
     const {error: insertError} = await supabaseClient
       .from('shared_cash_bill_deletions')
-      .insert(pendingLocal.map(id=>({id})));
+      .upsert(pendingLocal.map(id=>({id})), {onConflict:'id', ignoreDuplicates:true});
     if(insertError && insertError.code !== '23505'){
       updateSyncUi('Algumas exclusões de boletos ainda aguardam sincronização.');
       return false;
@@ -1104,9 +1118,10 @@ async function refreshCloudData({announce=false}={}){
   if(announce) updateSyncUi('Buscando os dados mais recentes…');
   syncRefreshPromise = (async()=>{
     try{
+      const previousSignature = syncViewSignature();
       console.info('[sync] Iniciando conferência completa');
       const cloudStatePromise = loadCloudState().then(state=>{
-        if(state) applyCloudState(state);
+        if(state) applyCloudState(state, false);
         return true;
       }).catch(error=>{
         console.error('[sync] Falha ao carregar configurações', error);
@@ -1118,6 +1133,7 @@ async function refreshCloudData({announce=false}={}){
         cloudStatePromise,
       ]);
       const success = Boolean(transactionsOk && billsOk && stateOk);
+      if(previousSignature !== syncViewSignature()) render();
       if(success){
         clearTimeout(syncRetryTimer);
         const time = new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
@@ -1885,24 +1901,40 @@ function renderBillPanel(){
       const bill = bills.find(b=>b.id===id);
       if(!bill) return;
       if(btn.dataset.action==='pay'){
-        bill.paid = true;
-        bill.paidDate = formatLocalDate(new Date());
-        bill.updatedAt = new Date().toISOString();
+        btn.disabled = true;
+        const paidDate = formatLocalDate(new Date());
+        const updatedAt = new Date().toISOString();
         const paidTransaction = {
           id: Date.now().toString(36)+Math.random().toString(36).slice(2,7),
           storeId: bill.storeId, type:'saida', category:'Boleto',
-          description: bill.description, value: bill.value, date: bill.paidDate
+          description: bill.description, value: bill.value, date: paidDate
         };
+        let cloudPaymentConfirmed = false;
+        if(supabaseClient && syncUser && navigator.onLine!==false){
+          const {data:paidNow, error:paymentError} = await supabaseClient.rpc('pay_shared_cash_bill', {
+            p_bill_id:bill.id,
+            p_payment_transaction_id:paidTransaction.id,
+            p_paid_date:paidDate,
+          });
+          if(!paymentError && paidNow===false){
+            await refreshCloudData();
+            toast('Este boleto já foi pago em outro aparelho.');
+            return;
+          }
+          if(paymentError) console.error('[sync] Baixa atômica indisponível; salvando para sincronizar', paymentError);
+          else cloudPaymentConfirmed = Boolean(paidNow);
+        }
+        bill.paid = true;
+        bill.paidDate = paidDate;
+        bill.updatedAt = updatedAt;
         bill.paymentTransactionId = paidTransaction.id;
         transactions.push(paidTransaction);
         render();
         await saveBills();
         saveTransactions();
-        const [billSynced, transactionSynced] = await Promise.all([
-          upsertCloudBills([bill]),
-          upsertCloudTransactions([paidTransaction]),
-        ]);
-        const synced = billSynced && transactionSynced;
+        const synced = cloudPaymentConfirmed || (await Promise.all([
+          upsertCloudBills([bill]), upsertCloudTransactions([paidTransaction]),
+        ])).every(Boolean);
         toast(synced ? 'Boleto marcado como pago' : 'Pagamento salvo; sincronização pendente.');
       }else{
         bills = bills.filter(b=>b.id!==id);
@@ -2507,7 +2539,20 @@ initSync();
 
 <script>
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+  let reloadingForUpdate = false;
+  navigator.serviceWorker.addEventListener('controllerchange', ()=>{
+    if(reloadingForUpdate) return;
+    reloadingForUpdate = true;
+    window.location.reload();
+  });
+  window.addEventListener('load', async ()=>{
+    try{
+      const registration = await navigator.serviceWorker.register('./sw.js');
+      await registration.update();
+    }catch(error){
+      console.error(`[app v${APP_VERSION}] Não foi possível verificar atualizações`, error);
+    }
+  });
 }
 </script>
 </body>

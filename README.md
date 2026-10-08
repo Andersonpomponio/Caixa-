@@ -1,32 +1,46 @@
-# Ótica Central
+# Caixa Central
 
-Painel integrado para exames, leads da ótica, leads da clínica, comissões de
-lentes, crediários de pastores e crediários gerais.
+Aplicativo instalável para controlar entradas, saídas e boletos das unidades.
 
-## Base compartilhada
+## Aplicativo publicado
 
-O arquivo `supabase/schema.sql` contém a estrutura multiusuário com autenticação,
-separação por empresa e segurança por linha (RLS). O navegador deve usar somente
-a chave publicável; nunca use uma chave secreta ou `service_role` no aplicativo.
+- Endereço: https://andersonpomponio.github.io/Caixa-/
+- Publicação: GitHub Pages, branch `main`, pasta raiz.
+- Arquivos principais: `index.html`, `sw.js`, `manifest.webmanifest` e `icon.svg`.
+- Versão atual do aplicativo: 32.
 
-Para conectar, crie `config.js` a partir de `config.example.js` e informe a URL,
-a chave publicável e o ID da organização.
+## Dados e sincronização
 
-Aplicação web instalável para controle de entradas, saídas e boletos.
+Os lançamentos e boletos são compartilhados pelo Supabase. Anderson e Luciane
+usam contas separadas, mas enxergam a mesma caixa. O navegador também mantém
+uma cópia local para permitir recuperação quando a conexão oscila.
 
-## Publicar no GitHub Pages
+A sincronização usa três mecanismos:
 
-1. Envie os arquivos da branch `main` para o GitHub.
-2. No repositório, abra **Settings → Pages**.
-3. Em **Build and deployment**, selecione **Deploy from a branch**.
-4. Escolha a branch `main`, a pasta `/(root)` e salve.
-5. Aguarde a publicação. O GitHub exibirá o endereço do site nessa mesma tela.
+1. Atualização em tempo real quando outro aparelho altera o banco.
+2. Conferência periódica a cada 30 segundos para recuperar eventos perdidos.
+3. Botão **Atualizar**, que confere os dados e procura uma versão nova do app.
 
-## Instalar no celular ou iPad
+Exclusões são permanentes e registradas separadamente para não reaparecerem.
+A baixa de boleto é feita no banco em uma única operação para impedir que dois
+aparelhos criem duas saídas para o mesmo pagamento.
 
-1. Abra o endereço publicado no Safari.
-2. Toque em **Compartilhar**.
-3. Escolha **Adicionar à Tela de Início**.
-4. Confirme em **Adicionar**.
+## Atualização no celular ou iPad
 
-O app continuará abrindo como um aplicativo. Os dados financeiros continuam armazenados localmente em cada aparelho; use a opção de backup do próprio app para transferi-los entre dispositivos.
+1. Feche o Caixa Central nos dois aparelhos.
+2. Abra novamente pelo ícone da tela inicial.
+3. Confira no texto de sincronização se aparece `versão 32`.
+4. Se necessário, toque no botão **Atualizar** uma vez.
+
+Quando uma versão nova é instalada, o aplicativo recarrega automaticamente.
+
+## Outros arquivos deste repositório
+
+A pasta `dist/` pertence ao painel **Ótica Central**, publicado separadamente.
+Ela não é a fonte do Caixa Central no GitHub Pages. Alterações no app financeiro
+devem ser feitas nos arquivos da raiz para não misturar os dois sistemas.
+
+## Segurança
+
+O aplicativo público usa somente a chave publicável do Supabase. Nunca coloque
+uma chave secreta ou `service_role` em arquivos enviados ao GitHub.
