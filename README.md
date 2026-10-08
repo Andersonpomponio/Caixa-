@@ -7,7 +7,14 @@ Aplicativo instalável para controlar entradas, saídas e boletos das unidades.
 - Endereço: https://andersonpomponio.github.io/Caixa-/
 - Publicação: GitHub Pages, branch `main`, pasta raiz.
 - Arquivos principais: `index.html`, `sw.js`, `manifest.webmanifest` e `icon.svg`.
-- Versão atual do aplicativo: 32.
+- Versão atual do aplicativo: 33.
+
+## Organização do painel
+
+Os totais de entradas, saídas e saldo ficam sempre visíveis. O restante do
+painel é dividido em quatro abas: **Resumo**, **Lançamentos**, **Boletos** e
+**Análises**. Somente a área aberta é renderizada, reduzindo o trabalho do
+celular sem interromper a sincronização em tempo real.
 
 ## Dados e sincronização
 
@@ -29,7 +36,7 @@ aparelhos criem duas saídas para o mesmo pagamento.
 
 1. Feche o Caixa Central nos dois aparelhos.
 2. Abra novamente pelo ícone da tela inicial.
-3. Confira no texto de sincronização se aparece `versão 32`.
+3. Confira no texto de sincronização se aparece `versão 33`.
 4. Se necessário, toque no botão **Atualizar** uma vez.
 
 Quando uma versão nova é instalada, o aplicativo recarrega automaticamente.

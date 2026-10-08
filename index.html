@@ -327,6 +327,15 @@
   .login-users{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0 16px;}
   .login-user{padding:12px 8px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);color:var(--ink);font:inherit;font-weight:700;cursor:pointer;}
   .login-user.on{border-color:var(--blue);background:var(--gold-dim);color:var(--blue);}
+  .dashboard-nav{position:sticky;top:8px;z-index:15;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin:4px 0 16px;padding:5px;border:1px solid var(--line);border-radius:16px;background:var(--surface);box-shadow:0 10px 24px rgba(0,0,0,.18);backdrop-filter:blur(14px);}
+  .dashboard-nav-btn{min-width:0;min-height:44px;padding:8px 6px;border:0;border-radius:11px;background:transparent;color:var(--ink-soft);font:inherit;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap;transition:background .18s ease,color .18s ease,transform .18s ease;}
+  .dashboard-nav-btn:hover{transform:translateY(-1px);color:var(--ink);}
+  .dashboard-nav-btn.on{background:var(--blue);color:#0A0A0B;box-shadow:0 6px 16px rgba(201,162,90,.25);}
+  .dashboard-pane{display:none;}
+  .dashboard-pane.active{display:block;animation:pane-in .18s ease both;}
+  @keyframes pane-in{from{opacity:.35;transform:translateY(5px)}to{opacity:1;transform:none}}
+  .pane-intro{margin:-3px 2px 12px;color:var(--ink-soft);font-size:11.5px;line-height:1.45;}
+  @media(max-width:430px){.dashboard-nav{top:6px;gap:3px;padding:4px;}.dashboard-nav-btn{min-height:42px;padding:7px 3px;font-size:10px;}}
 </style>
 </head>
 <body>
@@ -392,64 +401,80 @@
     <div class="scard saldo"><div class="lbl">Saldo</div><div class="val mono" id="sumBal">R$ 0</div></div>
   </div>
 
-  <div class="panel">
-    <h2 id="billTitle">Boletos</h2>
-    <div class="bill-view-tabs" role="tablist" aria-label="Situação dos boletos">
-      <button type="button" class="bill-view-tab on" id="billViewUpcoming" role="tab">A vencer</button>
-      <button type="button" class="bill-view-tab" id="billViewOverdue" role="tab">Vencidos</button>
-      <button type="button" class="bill-view-tab" id="billViewPaid" role="tab">Pagos</button>
-    </div>
-    <div class="alert-grid" id="billAlerts"></div>
-    <div class="bill-tools">
-      <input type="search" class="bill-search" id="billSearch" placeholder="Buscar boleto, loja ou valor" aria-label="Buscar boletos">
-      <select class="bill-status-filter" id="billStatusFilter" aria-label="Filtrar situação dos boletos"></select>
-    </div>
-    <div class="bill-results-info" id="billResultsInfo"></div>
-    <div class="bill-list" id="billList"></div>
-    <div class="bill-pagination" id="billPagination"></div>
-  </div>
+  <nav class="dashboard-nav" role="tablist" aria-label="Áreas do painel">
+    <button type="button" class="dashboard-nav-btn on" data-section="summary" role="tab" aria-selected="true">Resumo</button>
+    <button type="button" class="dashboard-nav-btn" data-section="transactions" role="tab" aria-selected="false">Lançamentos</button>
+    <button type="button" class="dashboard-nav-btn" data-section="bills" role="tab" aria-selected="false">Boletos</button>
+    <button type="button" class="dashboard-nav-btn" data-section="analytics" role="tab" aria-selected="false">Análises</button>
+  </nav>
 
-  <div class="panel">
-    <h2>Funil de caixa</h2>
-    <div id="funnel"></div>
-  </div>
-
-  <div class="panel">
-    <h2>Saldo por unidade</h2>
-    <div class="bars" id="bars"></div>
-  </div>
-
-  <div class="panel">
-    <h2 id="txTitle">Lançamentos</h2>
-    <div class="tx-tools">
-      <input type="search" class="tx-search" id="txSearch" placeholder="Buscar categoria, descrição, loja ou valor" aria-label="Buscar lançamentos">
-      <select class="tx-type-filter" id="txTypeFilter" aria-label="Filtrar tipo de lançamento">
-        <option value="all">Todos</option>
-        <option value="entrada">Entradas</option>
-        <option value="saida">Saídas</option>
-        <option value="boleto">Boletos</option>
-      </select>
-      <select class="tx-period-filter" id="txPeriodFilter" aria-label="Filtrar período dos lançamentos">
-        <option value="day">Hoje</option>
-        <option value="week">Esta semana</option>
-        <option value="month" selected>Este mês</option>
-        <option value="all">Todo o histórico</option>
-      </select>
+  <section class="dashboard-pane active" data-pane="summary" role="tabpanel">
+    <p class="pane-intro">Visão rápida do período selecionado e do saldo de cada unidade.</p>
+    <div class="panel">
+      <h2>Funil de caixa</h2>
+      <div id="funnel"></div>
     </div>
-    <div class="tx-results-info" id="txResultsInfo"></div>
-    <div class="tx-list" id="txList"></div>
-    <div class="tx-pagination" id="txPagination"></div>
-  </div>
 
-  <div class="panel">
-    <h2 id="chartTitle">Fluxo do período</h2>
-    <div class="chart-legend" aria-label="Legenda do gráfico">
-      <span><i class="chart-key" style="background:var(--teal)"></i>Entradas</span>
-      <span><i class="chart-key" style="background:var(--red)"></i>Saídas</span>
-      <span><i class="chart-key" style="background:var(--blue)"></i>Saldo</span>
+    <div class="panel">
+      <h2>Saldo por unidade</h2>
+      <div class="bars" id="bars"></div>
     </div>
-    <div class="cash-chart" id="cashChart"></div>
-  </div>
+  </section>
+
+  <section class="dashboard-pane" data-pane="transactions" role="tabpanel" hidden>
+    <div class="panel">
+      <h2 id="txTitle">Lançamentos</h2>
+      <div class="tx-tools">
+        <input type="search" class="tx-search" id="txSearch" placeholder="Buscar categoria, descrição, loja ou valor" aria-label="Buscar lançamentos">
+        <select class="tx-type-filter" id="txTypeFilter" aria-label="Filtrar tipo de lançamento">
+          <option value="all">Todos</option>
+          <option value="entrada">Entradas</option>
+          <option value="saida">Saídas</option>
+          <option value="boleto">Boletos</option>
+        </select>
+        <select class="tx-period-filter" id="txPeriodFilter" aria-label="Filtrar período dos lançamentos">
+          <option value="day">Hoje</option>
+          <option value="week">Esta semana</option>
+          <option value="month" selected>Este mês</option>
+          <option value="all">Todo o histórico</option>
+        </select>
+      </div>
+      <div class="tx-results-info" id="txResultsInfo"></div>
+      <div class="tx-list" id="txList"></div>
+      <div class="tx-pagination" id="txPagination"></div>
+    </div>
+  </section>
+
+  <section class="dashboard-pane" data-pane="bills" role="tabpanel" hidden>
+    <div class="panel">
+      <h2 id="billTitle">Boletos</h2>
+      <div class="bill-view-tabs" role="tablist" aria-label="Situação dos boletos">
+        <button type="button" class="bill-view-tab on" id="billViewUpcoming" role="tab">A vencer</button>
+        <button type="button" class="bill-view-tab" id="billViewOverdue" role="tab">Vencidos</button>
+        <button type="button" class="bill-view-tab" id="billViewPaid" role="tab">Pagos</button>
+      </div>
+      <div class="alert-grid" id="billAlerts"></div>
+      <div class="bill-tools">
+        <input type="search" class="bill-search" id="billSearch" placeholder="Buscar boleto, loja ou valor" aria-label="Buscar boletos">
+        <select class="bill-status-filter" id="billStatusFilter" aria-label="Filtrar situação dos boletos"></select>
+      </div>
+      <div class="bill-results-info" id="billResultsInfo"></div>
+      <div class="bill-list" id="billList"></div>
+      <div class="bill-pagination" id="billPagination"></div>
+    </div>
+  </section>
+
+  <section class="dashboard-pane" data-pane="analytics" role="tabpanel" hidden>
+    <div class="panel">
+      <h2 id="chartTitle">Fluxo do período</h2>
+      <div class="chart-legend" aria-label="Legenda do gráfico">
+        <span><i class="chart-key" style="background:var(--teal)"></i>Entradas</span>
+        <span><i class="chart-key" style="background:var(--red)"></i>Saídas</span>
+        <span><i class="chart-key" style="background:var(--blue)"></i>Saldo</span>
+      </div>
+      <div class="cash-chart" id="cashChart"></div>
+    </div>
+  </section>
 </div>
 
 <button class="fab" id="btnAdd" aria-label="Adicionar lançamento">+</button>
@@ -566,6 +591,10 @@ let txTypeFilter = 'all';
 let txPeriodFilter = 'month';
 let txPage = 1;
 const TX_PER_PAGE = 10;
+const DASHBOARD_SECTIONS = ['summary','transactions','bills','analytics'];
+let activeSection = 'summary';
+try{ activeSection = localStorage.getItem('oag_fluxo_active_section') || 'summary'; }catch(e){}
+if(!DASHBOARD_SECTIONS.includes(activeSection)) activeSection = 'summary';
 let periodDate = new Date(formatLocalDate(new Date()) + 'T00:00:00');
 
 const SUPABASE_URL = 'https://nynpmqlnxvmihusmfffo.supabase.co';
@@ -585,7 +614,7 @@ let realtimeStatus = 'CLOSED';
 let localChangeVersion = 0;
 let deletedTransactionIds = new Set();
 let deletedBillIds = new Set();
-const APP_VERSION = '32';
+const APP_VERSION = '33';
 const SYNC_POLL_INTERVAL = 30000;
 const LOGIN_USERS = {
   anderson: {name:'Anderson', email:'anderson@caixacentral.local'},
@@ -1524,7 +1553,7 @@ function filteredTx(){
   return list.filter(t => isInSelectedPeriod(t.date));
 }
 
-function renderSummary(){
+function renderSummary(renderFunnel=true){
   const list = filteredTx();
   const inSum = list.filter(t=>t.type==='entrada').reduce((a,b)=>a+b.value,0);
   const outSum = list.filter(t=>t.type==='saida').reduce((a,b)=>a+b.value,0);
@@ -1532,6 +1561,7 @@ function renderSummary(){
   document.getElementById('sumOut').textContent = fmt(outSum);
   document.getElementById('sumBal').textContent = fmt(inSum-outSum);
 
+  if(!renderFunnel) return;
   const funnel = document.getElementById('funnel');
   const max = Math.max(inSum, outSum, Math.abs(inSum-outSum), 1);
   const rows = [
@@ -1962,14 +1992,43 @@ function renderBillPanel(){
   });
 }
 
+function renderSectionNav(){
+  document.querySelectorAll('.dashboard-nav-btn').forEach(button=>{
+    const selected = button.dataset.section === activeSection;
+    button.classList.toggle('on', selected);
+    button.setAttribute('aria-selected', selected ? 'true' : 'false');
+  });
+  document.querySelectorAll('.dashboard-pane').forEach(pane=>{
+    const selected = pane.dataset.pane === activeSection;
+    pane.classList.toggle('active', selected);
+    pane.hidden = !selected;
+  });
+}
+
+function renderActiveSection(includeSummary=true){
+  if(activeSection==='summary'){
+    if(includeSummary) renderSummary(true);
+    renderBars();
+  }else if(activeSection==='transactions') renderTxList();
+  else if(activeSection==='bills') renderBillPanel();
+  else if(activeSection==='analytics') renderCashChart();
+}
+
+function switchDashboardSection(section){
+  if(!DASHBOARD_SECTIONS.includes(section)) return;
+  activeSection = section;
+  try{ localStorage.setItem('oag_fluxo_active_section', section); }catch(e){}
+  renderSectionNav();
+  renderActiveSection();
+  window.scrollTo({top:document.querySelector('.dashboard-nav').offsetTop-8,behavior:'smooth'});
+}
+
 function render(){
   renderPeriodFilter();
   renderTabs();
-  renderSummary();
-  renderBillPanel();
-  renderBars();
-  renderTxList();
-  renderCashChart();
+  renderSummary(activeSection==='summary');
+  renderSectionNav();
+  renderActiveSection(false);
 }
 
 // Modal handling
@@ -2367,6 +2426,9 @@ document.getElementById('typeOut').onclick = ()=>setFormType('saida');
 document.getElementById('typeBill').onclick = ()=>setFormType('boleto');
 document.getElementById('periodMonth').onclick = ()=>{ periodMode='month'; billPage=1; render(); };
 document.getElementById('periodWeek').onclick = ()=>{ periodMode='week'; billPage=1; render(); };
+document.querySelectorAll('.dashboard-nav-btn').forEach(button=>{
+  button.onclick = ()=>switchDashboardSection(button.dataset.section);
+});
 function switchBillView(view){
   billView = view;
   billSearch = '';
