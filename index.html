@@ -614,7 +614,7 @@ let realtimeStatus = 'CLOSED';
 let localChangeVersion = 0;
 let deletedTransactionIds = new Set();
 let deletedBillIds = new Set();
-const APP_VERSION = '33';
+const APP_VERSION = '34';
 const SYNC_POLL_INTERVAL = 30000;
 const LOGIN_USERS = {
   anderson: {name:'Anderson', email:'anderson@caixacentral.local'},
@@ -937,6 +937,35 @@ async function loadCloudBills(){
     .is('deleted_at', null);
   if(deletionError) console.error('[sync] Falha ao concluir exclusões de boletos', deletionError);
   return pendingSynced && !deletionError;
+}
+
+async function reconcileCloudBill(id){
+  if(!supabaseClient || !syncUser) return {status:'offline'};
+  const {data, error} = await supabaseClient
+    .from('shared_cash_bills')
+    .select('id,store_id,category,description,value,due_date,paid,paid_date,payment_transaction_id,updated_at,deleted_at')
+    .eq('id', id)
+    .limit(1);
+  if(error){
+    console.error('[sync] Falha ao conferir o estado oficial do boleto', error);
+    return {status:'error'};
+  }
+  const row = Array.isArray(data) ? data[0] : null;
+  if(!row) return {status:'missing'};
+  if(row.deleted_at){
+    deletedBillIds.add(id);
+    bills = bills.filter(item=>item.id!==id);
+    lsSet('deletedBillIds', [...deletedBillIds]);
+    lsSet('bills', bills);
+    render();
+    return {status:'deleted'};
+  }
+  const authoritativeBill = cloudRowToBill(row);
+  bills = bills.filter(item=>item.id!==id);
+  bills.push(authoritativeBill);
+  lsSet('bills', bills);
+  render();
+  return {status:authoritativeBill.paid ? 'paid' : 'open', bill:authoritativeBill};
 }
 
 async function markCloudBillDeleted(id){
@@ -1947,8 +1976,21 @@ function renderBillPanel(){
             p_paid_date:paidDate,
           });
           if(!paymentError && paidNow===false){
-            await refreshCloudData();
-            toast('Este boleto já foi pago em outro aparelho.');
+            const official = await reconcileCloudBill(id);
+            if(official.status==='paid'){
+              scheduleSyncRetry(200);
+              toast('Boleto já pago. A lista foi atualizada.');
+            }else if(official.status==='deleted'){
+              toast('Este boleto já havia sido excluído.');
+            }else if(official.status==='open'){
+              btn.disabled = false;
+              updateSyncUi('Não foi possível confirmar a baixa do boleto.');
+              toast('A baixa não foi confirmada. Toque em Atualizar e tente novamente.');
+            }else{
+              btn.disabled = false;
+              scheduleSyncRetry(1000);
+              toast('Não consegui conferir o boleto. Tentarei sincronizar novamente.');
+            }
             return;
           }
           if(paymentError) console.error('[sync] Baixa atômica indisponível; salvando para sincronizar', paymentError);

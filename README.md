@@ -7,7 +7,7 @@ Aplicativo instalável para controlar entradas, saídas e boletos das unidades.
 - Endereço: https://andersonpomponio.github.io/Caixa-/
 - Publicação: GitHub Pages, branch `main`, pasta raiz.
 - Arquivos principais: `index.html`, `sw.js`, `manifest.webmanifest` e `icon.svg`.
-- Versão atual do aplicativo: 33.
+- Versão atual do aplicativo: 34.
 
 ## Organização do painel
 
@@ -32,11 +32,15 @@ Exclusões são permanentes e registradas separadamente para não reaparecerem.
 A baixa de boleto é feita no banco em uma única operação para impedir que dois
 aparelhos criem duas saídas para o mesmo pagamento.
 
+Um boleto pago não pode voltar ao estado aberto, mesmo que um aparelho antigo
+envie uma cópia desatualizada. Quando outro aparelho já deu a baixa, o app busca
+o registro oficial e atualiza imediatamente a lista de vencidos.
+
 ## Atualização no celular ou iPad
 
 1. Feche o Caixa Central nos dois aparelhos.
 2. Abra novamente pelo ícone da tela inicial.
-3. Confira no texto de sincronização se aparece `versão 33`.
+3. Confira no texto de sincronização se aparece `versão 34`.
 4. Se necessário, toque no botão **Atualizar** uma vez.
 
 Quando uma versão nova é instalada, o aplicativo recarrega automaticamente.
